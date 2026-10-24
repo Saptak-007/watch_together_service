@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10141d" />
+    <title>SideBySide — Watch together</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/"
+          ><span class="brand-mark">▶</span> sidebyside</a
+        >
+        <span class="top-note">A little closer, wherever you are.</span>
+      </header>
+
+      <section id="landing" class="landing">
+        <div class="hero-copy">
+          <div class="eyebrow">
+            <span class="live-dot"></span> YOUR PRIVATE WATCH ROOM
+          </div>
+          <h1>Same movie.<br /><span>Same moment.</span></h1>
+          <p>
+            Bring your people together. Pick a video, share a room code, and
+            press play as one.
+          </p>
+          <div class="hero-actions">
+            <button id="createRoom" class="button primary">
+              Create a room <span>↗</span>
+            </button>
+            <button id="showJoin" class="button secondary">
+              Join with a code
+            </button>
+          </div>
+          <form id="createForm" class="join-form hidden">
+            <label
+              >YOUR NICKNAME<input
+                id="createNickname"
+                maxlength="24"
+                placeholder="What should we call you?"
+                autocomplete="nickname"
+            /></label>
+            <button class="button primary" type="submit">
+              Create a room <span>→</span>
+            </button>
+          </form>
+          <form id="joinForm" class="join-form hidden">
+            <label
+              >ROOM CODE<input
+                id="joinCode"
+                maxlength="6"
+                placeholder="e.g. K7Q4PD"
+                autocomplete="off"
+            /></label>
+            <label
+              >YOUR NICKNAME<input
+                id="joinNickname"
+                maxlength="24"
+                placeholder="What should we call you?"
+                autocomplete="nickname"
+            /></label>
+            <button class="button primary" type="submit">
+              Join room <span>→</span>
+            </button>
+          </form>
+          <p id="landingMessage" class="message" role="status"></p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="screen-card">
+            <div class="screen-glow"></div>
+            <div class="screen-play">▶</div>
+            <div class="screen-caption">PLAYING TOGETHER</div>
+          </div>
+          <div class="avatar avatar-a">J</div>
+          <div class="avatar avatar-b">M</div>
+          <div class="avatar avatar-c">A</div>
+          <div class="sound-wave">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i
+            ><i></i><i></i>
+          </div>
+        </div>
+      </section>
+
+      <section id="room" class="room hidden">
+        <div class="room-heading">
+          <div>
+            <div class="eyebrow">
+              <span class="live-dot"></span> ROOM IS OPEN
+            </div>
+            <h2>Movie night is on.</h2>
+          </div>
+          <button id="leaveRoom" class="button ghost">Leave room</button>
+        </div>
+        <div class="room-grid">
+          <section class="player-panel panel">
+            <div class="video-wrap" id="videoWrap">
+              <video id="video" controls playsinline></video>
+              <div id="emptyVideo" class="empty-video">
+                <div class="empty-icon">▷</div>
+                <h3>Waiting for a movie</h3>
+                <p>The room creator can add a video file below.</p>
+              </div>
+            </div>
+            <div class="player-foot">
+              <span><i class="live-dot"></i> SYNCED PLAYBACK</span
+              ><span>Volume stays yours</span>
+            </div>
+          </section>
+          <aside class="side-column">
+            <section class="panel room-code-panel">
+              <div class="panel-label">SHARE THIS ROOM CODE</div>
+              <div class="code-line">
+                <strong id="roomCode">------</strong
+                ><button
+                  id="copyCode"
+                  class="icon-button"
+                  title="Copy room code"
+                >
+                  ▢
+                </button>
+              </div>
+              <p>Friends enter this code with a nickname to join.</p>
+            </section>
+            <section class="panel people-panel">
+              <div class="panel-title">
+                <h3>In the room</h3>
+                <span id="memberCount" class="count-pill">0</span>
+              </div>
+              <ul id="memberList" class="member-list"></ul>
+            </section>
+            <section id="filePanel" class="panel file-panel">
+              <div class="panel-label">THE MOVIE</div>
+              <div id="noFile">
+                <h3>Bring a video in</h3>
+                <p>
+                  Choose a video file. Everyone will be invited to download it.
+                </p>
+              </div>
+              <div id="fileReady" class="file-ready hidden">
+                <div class="file-icon">♫</div>
+                <div class="file-info">
+                  <strong id="fileName">Video file</strong
+                  ><span id="fileStatus">Ready to download</span>
+                </div>
+                <button id="downloadFile" class="button primary small">
+                  Download
+                </button>
+              </div>
+              <label
+                id="existingFileButton"
+                class="button secondary file-button hidden"
+              >
+                Use a video already on this device
+                <input
+                  id="existingFileInput"
+                  type="file"
+                  accept="video/*,audio/*"
+                />
+              </label>
+              <label class="button secondary file-button">
+                <span id="fileChooserText">Choose video</span>
+                <input id="fileInput" type="file" accept="video/*,audio/*" />
+              </label>
+              <div id="uploadProgress" class="progress hidden">
+                <div id="progressBar"></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+        <p id="roomMessage" class="message" role="status"></p>
+      </section>
+      <footer>
+        <span>Made for movie nights</span
+        ><span>Play together, wherever you are <b>✦</b></span>
+      </footer>
+    </main>
+    <div
+      id="downloadPrompt"
+      class="modal-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="promptTitle"
+    >
+      <div class="modal">
+        <div class="modal-icon">↓</div>
+        <div class="eyebrow">A VIDEO IS READY</div>
+        <h2 id="promptTitle">Join the movie night?</h2>
+        <p id="promptText">
+          A room member added a video. Download it to watch along.
+        </p>
+        <div class="modal-actions">
+          <button id="dismissPrompt" class="button secondary">Later</button
+          ><button id="promptUseExisting" class="button secondary">
+            Use a file on this device
+          </button
+          ><button id="promptDownload" class="button primary">
+            Download video <span>↓</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <script src="/vendor/socket.io.min.js"></script>
+    <script src="/config.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
