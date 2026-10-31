@@ -1,99 +1,142 @@
 # SideBySide
 
-A first watch-together app using Flask (Python), Flask-SocketIO, and plain HTML/CSS/JavaScript.
+SideBySide is a watch-together learning project built with Flask (Python),
+Flask-SocketIO, and plain HTML, CSS, and JavaScript. People join a room with a
+room code and a shared access code. They can chat, share a local audio or video
+file, and synchronize playback. Camera and microphone calls use LiveKit Cloud.
 
-The browser Socket.IO client is included locally at `web/vendor/socket.io.min.js` (socket.io-client 4.7.5), so loading the app does not depend on a third-party CDN.
-The LiveKit browser client is included locally at `web/vendor/livekit-client.umd.js` (livekit-client 2.23.0); its license is next to the file.
+The Socket.IO browser client and LiveKit browser client are stored in
+`web/vendor`, so loading the application scripts does not require a JavaScript
+CDN. The page uses system fonts and does not fetch fonts from a third party.
 
-## Run it locally
+## Run locally
 
 1. Install Python 3.10 or newer.
-2. In this folder, create and activate a virtual environment:
+2. From this folder, create and activate a virtual environment, then install
+   the requirements:
 
    ```powershell
    py -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
-   Copy-Item .env.example .env
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
    ```
 
-   Edit `.env` and add your private LiveKit credentials before starting the server.
-
-3. Start the server:
+3. Edit `.env`. Set `SOPHISTICATED_CODE` to a long private shared code. Add the
+   LiveKit URL, API key, and API secret if you want to use the camera call.
+4. Start Flask and open http://127.0.0.1:5000:
 
    ```powershell
    py app.py
    ```
 
-4. Open http://127.0.0.1:5000. Open another browser window to try joining the same room.
+Debug mode is off by default. Set `FLASK_DEBUG=1` only for local development.
+The Flask development server is not intended for public hosting. A Cloudflare
+Tunnel can expose your computer while you test, but anyone who can reach the
+address can reach the Flask server; keep the tunnel private and stop it when
+you finish testing.
 
-The local Werkzeug development server uses Socket.IO polling by default. This
-avoids noisy WebSocket shutdown tracebacks when a browser leaves a room. When
-you later run Flask behind a server that supports WebSockets, set
-`SOCKETIO_ALLOW_WEBSOCKET=1` before starting Flask to enable WebSocket upgrades.
+## Configuration
 
-## What works in this first version
+`.env.example` lists the supported settings. Copy it to `.env` for local use;
+real `.env` files are ignored by Git. On a host such as Render, add the same
+settings in its Environment page rather than uploading `.env`.
 
-- Create a six-character room code; join with that code and a nickname.
-- See who is in the room.
-- Remove a member from the room when they leave or close the page.
-- Upload a local audio/video file to the Flask computer; room members get a download prompt.
-- Download the file into the browser and play it. Play/pause and seek updates are shared; volume remains local.
+| Setting | Purpose | Default |
+| --- | --- | --- |
+| `SOPHISTICATED_CODE` | Shared code required to create or join a room | Required |
+| `LIVEKIT_URL` | LiveKit Cloud WebSocket address | Call feature disabled if missing |
+| `LIVEKIT_API_KEY` | Server-side LiveKit API key | Call feature disabled if missing |
+| `LIVEKIT_API_SECRET` | Server-side LiveKit API secret | Call feature disabled if missing |
+| `FRONTEND_ORIGIN` | Allowed browser origins, comma-separated | Same-origin only |
+| `DATA_DIR` | Folder for uploads and the SQLite video index | Project folder |
+| `MAX_UPLOAD_BYTES` | Maximum uploaded file size in bytes | 1 GiB |
+| `MAX_STORED_BYTES` | Maximum combined size of saved server-side media files | 10 GiB |
+| `ROOM_EMPTY_TTL_SECONDS` | How long an empty room stays available for refresh/rejoin | 1,800 seconds |
+| `MAX_ROOM_MEMBERS` | Maximum connected people in one room | 20 |
+| `SOCKETIO_ALLOW_WEBSOCKET` | Allow polling connections to upgrade to WebSocket | Off |
+| `FLASK_DEBUG` | Enable Flask’s development debugger | Off |
 
-Rooms and uploaded files are held on the Flask computer. Room data is in memory and is cleared if Flask restarts. Uploaded files live in `uploads/` until replaced or manually removed.
+For a Netlify frontend, set `FRONTEND_ORIGIN` to the exact Netlify site origin,
+for example `https://your-site.netlify.app`. If you have more than one frontend,
+separate origins with commas. Do not add paths after the host name.
 
-## Netlify and a Flask computer
+## How files and room data are stored
 
-Netlify publishes the `web` folder. Flask must still run on a computer reachable from the internet. For a temporary trial, start Flask and use a tunnel such as Cloudflare Tunnel to get a public address. Put that address in `web/config.js` as `window.WATCH_API_URL`, then redeploy the site. The browser uses that address for both regular requests and Socket.IO. Keep Flask and the tunnel running for the room to work. The backend allows cross-origin requests by default in this learning version; before making a public service, restrict `FRONTEND_ORIGIN` to your Netlify site URL.
+Uploaded files are stored under `DATA_DIR/uploads`. The SQLite database
+`DATA_DIR/video_index.sqlite3` contains their names, sizes, and fingerprints,
+plus saved room codes, chat history, the selected room file, and the last
+playback position. It does not contain the video bytes. The fingerprint is
+calculated from file contents; changing only the name does not change it.
 
-This is a learning prototype, not a hardened public service: room codes are the only join check, there is no creator authentication, and the server has no persistent database or automatic upload cleanup. Large uploads use your computer's storage and internet connection. Some browser video formats/codecs may not play on every device.
+Connected members and pending file offers exist only in the running Python
+process. After a server restart, the room, chat, selected file, and last
+playback position are restored from SQLite, but people must reconnect and any
+unfinished file offer is cleared. Playback resumes paused. An empty room is
+expired after its configured timeout and is removed on the next room creation
+or join; this delay allows a page refresh to reconnect. Uploaded files stay in
+the data folder so they can be reused. Keep the data folder private because it
+contains room chat and video metadata. The server does not delete saved media
+automatically because files are kept for later reuse. It rejects a new unique
+upload when `MAX_STORED_BYTES` would be exceeded; the owner must remove old
+files and their matching rows from the video index to reclaim space.
 
-## Optional camera and microphone call
+The server issues a random private room token after a successful join. Browser
+requests for upload, reuse, download, and LiveKit tokens must include that
+token. The current tab’s session storage keeps the room details and shared
+access code so it can rejoin after refresh, plus the private room token. These
+values are readable by JavaScript running on this site, so this is a small
+shared-code gate, not individual user accounts or identity verification. An
+incorrect code is rejected, but attempts are not rate-limited.
 
-The call uses LiveKit Cloud for WebRTC audio/video. Flask continues to manage
-watch-room membership and synchronized movie playback. The call connects
-separately to LiveKit; the movie file is not sent to LiveKit.
+The default file limit is 1 GiB. The browser currently downloads the complete
+file before playing it, so large files can exceed phone memory or browser
+storage limits. Hosting providers may impose a lower upload limit or request
+timeout; choose a limit that fits your hosting plan.
 
-### Create the LiveKit project
+## Deploy the backend to Render
 
-1. Create an account at [LiveKit Cloud](https://cloud.livekit.io/) and create a
-   project. The free Build plan is enough to try the feature.
-2. Open the project settings and copy its WebSocket URL, API key, and API
-   secret. The URL starts with `wss://`.
-3. Add the settings below to your local `.env` file. Choose a private shared
-   room access code for `SOPHISTICATED_CODE`. Never hardcode the LiveKit API
-   secret or shared access code in browser JavaScript or commit them to GitHub:
+Create a Python Web Service connected to this GitHub repository and deploy the
+`main` branch.
 
-   ```text
-   SOPHISTICATED_CODE=choose-a-private-shared-code
-   LIVEKIT_URL=wss://your-project.livekit.cloud
-   LIVEKIT_API_KEY=your-project-api-key
-   LIVEKIT_API_SECRET=your-project-api-secret
-   ```
+- **Build command:** `pip install -r requirements.txt`
+- **Start command:** `gunicorn --worker-class gthread --workers 1 --threads 100 --bind 0.0.0.0:$PORT app:app`
+- **Environment:** set `SOPHISTICATED_CODE`, the three LiveKit settings, and
+  `SOCKETIO_ALLOW_WEBSOCKET=1`. Set `FRONTEND_ORIGIN` to the exact Netlify site
+  origin if Netlify hosts the page separately.
 
-Flask loads `.env` automatically when it starts. The `.env` file is ignored by
-Git, so its secrets stay on your computer. For Render, add the same names in
-the service's Environment settings. Enter your chosen access code for
-`SOPHISTICATED_CODE` and the values from LiveKit Cloud for the three LiveKit
-settings.
+The threaded Gunicorn setup uses the installed `simple-websocket` package for
+WebSocket support. Flask-SocketIO’s deployment documentation describes this
+threaded option and notes that multiple processes require a message queue for
+coordination: [Flask-SocketIO deployment](https://flask-socketio.readthedocs.io/en/latest/deployment.html).
+This app also keeps room state in one process, so keep one Gunicorn worker and
+one Render instance. Increasing worker or instance counts requires moving room
+state to shared storage and configuring Socket.IO coordination first.
 
-### Install and run
+Render’s default filesystem is temporary. If you want uploads and the SQLite
+index to survive a restart or deployment, attach a persistent disk and set
+`DATA_DIR` to its mount path (for example `/var/data`). Render currently
+requires a paid web service for a persistent disk; otherwise file changes can
+be lost. See [Render persistent disks](https://render.com/docs/disks). Room
+membership resets on restart even with a persistent disk. The saved playback
+position is restored, but playback stays paused until someone presses play.
 
-After pulling the code, install the added Python dependency with
-`pip install -r requirements.txt`. The LiveKit browser library is stored in
-`web/vendor`, so the web page does not need a third-party CDN to load it.
+## Netlify frontend
 
-When a participant joins a watch room, Flask checks that participant's active
-Socket.IO membership and creates a short-lived LiveKit token for that room.
-The browser connects to LiveKit with the token. Camera and microphone start
-off; each participant turns them on separately and grants browser permission.
-If LiveKit is not configured or a device cannot be used, participants can
-still stay in the watch room and use synchronized playback.
+Netlify publishes the `web` folder, as configured by `netlify.toml`. Set the
+public backend address in `web/config.js` as `window.WATCH_API_URL`, then
+redeploy the static site. The browser uses this address for both normal HTTP
+requests and Socket.IO. A public frontend still needs a backend service running
+somewhere; Netlify only serves the static frontend in this setup.
 
-If Netlify hosts the page separately, keep `WATCH_API_URL` pointed at the
-public Flask server and set `FRONTEND_ORIGIN` on Flask to the Netlify site
-origin. LiveKit's URL and API key are configured on Flask; the API secret
-must remain server-side.
+## LiveKit camera and microphone call
 
-LiveKit Cloud's free-plan limits can change. Check the project's LiveKit
-dashboard before sharing the service widely.
+Flask creates LiveKit participant tokens valid for 10 minutes. The browser
+connects to LiveKit Cloud for audio and video; the movie file is not sent to
+LiveKit. Camera and microphone start off and are enabled by each participant
+after granting browser permission. If LiveKit is unavailable, the watch room
+and playback can still work.
+
+Keep the LiveKit API secret only in `.env` locally or in the hosting provider’s
+secret environment settings. If a key or secret is pasted into a public place
+or shared unintentionally, revoke it in LiveKit and create a replacement.

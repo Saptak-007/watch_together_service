@@ -14,6 +14,8 @@ const landing = $("landing"),
   video = $("video");
 let currentCode = "",
   nickname = "",
+  roomToken = "",
+  joinRequest = null,
   currentFile = null,
   incomingVideoOffer = null,
   pendingUploadOffer = null,
@@ -154,11 +156,11 @@ function getClientId() {
 
 const clientId = getClientId();
 
-function saveActiveRoom(code, name, accessCode) {
+function saveActiveRoom(code, name, accessCode, token = "") {
   try {
     sessionStorage.setItem(
       ACTIVE_ROOM_KEY,
-      JSON.stringify({ code, name, accessCode }),
+      JSON.stringify({ code, name, accessCode, token }),
     );
   } catch {
     // The room still works if this browser does not allow session storage.
@@ -258,6 +260,24 @@ function setCallStatus(text, isError = false) {
   const status = $("callStatus");
   status.textContent = text;
   status.classList.toggle("error", isError);
+}
+
+function mediaDeviceError(error, deviceName) {
+  switch (error?.name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return `Allow browser access to the ${deviceName}, then try again.`;
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return `No ${deviceName} was found on this device.`;
+    case "NotReadableError":
+    case "TrackStartError":
+      return `The ${deviceName} could not start. It may be in use by another app.`;
+    case "OverconstrainedError":
+      return `The ${deviceName} does not support the requested settings.`;
+    default:
+      return error?.message || `Could not start the ${deviceName}.`;
+  }
 }
 
 function updateCallControls() {
@@ -423,8 +443,11 @@ async function joinLiveKitCall(code) {
   try {
     const tokenResponse = await fetch(`${API}/api/rooms/${code}/livekit-token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ socket_id: socket?.id || "", client_id: clientId }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Room-Token": roomToken,
+      },
+      body: "{}",
     });
     const tokenData = await tokenResponse.json();
     if (!tokenResponse.ok) {
@@ -556,9 +579,9 @@ $("toggleMicrophone").addEventListener("click", async () => {
     setCallStatus(
       `Call connected. Microphone ${nextState ? "on" : "off"}; camera ${localCameraEnabled ? "on" : "off"}.`,
     );
-  } catch {
+  } catch (error) {
     setCallStatus(
-      `Could not turn on the microphone. It may already be in use in another tab or app. Turn it off there and try again. You can still watch together.`,
+      `${mediaDeviceError(error, "microphone")} You can still watch together.`,
       true,
     );
   }
@@ -592,10 +615,10 @@ $("toggleCamera").addEventListener("click", async () => {
     setCallStatus(
       `Call connected. Microphone ${localMicrophoneEnabled ? "on" : "off"}; camera ${nextState ? "on" : "off"}.`,
     );
-  } catch {
+  } catch (error) {
     await stopMirroredCamera();
     setCallStatus(
-      `Could not turn on the camera. It may already be in use in another tab or app. Turn it off there and try again. You can still watch together.`,
+      `${mediaDeviceError(error, "camera")} You can still watch together.`,
       true,
     );
   }
@@ -617,6 +640,7 @@ function connectAndJoin(code, name, accessCode = $("accessCode").value.trim()) {
     return;
   }
   nickname = name;
+  joinRequest = { code, name, accessCode };
   if (!socket) {
     message(
       $("landingMessage"),
@@ -627,17 +651,33 @@ function connectAndJoin(code, name, accessCode = $("accessCode").value.trim()) {
   }
   saveActiveRoom(code, name, accessCode);
   message($("landingMessage"), "Connecting to the room…");
-  if (!socket.connected) socket.connect();
-  const joinWhenReady = () =>
+  const emitJoinRequest = () =>
     socket.emit("join_room", {
       code,
       nickname,
       client_id: clientId,
       access_code: accessCode,
     });
-  if (socket.connected) joinWhenReady();
-  else socket.once("connect", joinWhenReady);
+  joinRequest.emit = emitJoinRequest;
+  if (socket.connected) emitJoinRequest();
+  else socket.connect();
 }
+
+socket?.on("connect", () => {
+  if (joinRequest?.emit) {
+    message(
+      currentCode ? $("roomMessage") : $("landingMessage"),
+      currentCode ? "Reconnected. Restoring your room…" : "Connecting to the room…",
+    );
+    joinRequest.emit();
+  }
+});
+socket?.on("disconnect", () => {
+  if (currentCode) {
+    roomToken = "";
+    message($("roomMessage"), "Connection lost. Reconnecting to your room…", true);
+  }
+});
 
 $("createRoom").addEventListener("click", () => {
   $("joinForm").classList.add("hidden");
@@ -733,6 +773,17 @@ function renderChatMessage(data) {
 }
 
 socket?.on("joined", (data) => {
+  roomToken = data.member_token || "";
+  if (!roomToken) {
+    message($("landingMessage"), "The server did not authorize this room session.", true);
+    return;
+  }
+  saveActiveRoom(
+    data.code,
+    nickname,
+    joinRequest?.accessCode || "",
+    roomToken,
+  );
   $("accessCode").value = "";
   showRoom(data.code);
   $("chatMessages").replaceChildren();
@@ -757,13 +808,29 @@ socket?.on("joined", (data) => {
   joinLiveKitCall(data.code);
 });
 socket?.on("join_error", (data) => {
+  roomToken = "";
+  joinRequest = null;
   clearActiveRoom();
+  if (currentCode) {
+    leaveLiveKitCall();
+    video.pause();
+    if (video.src.startsWith("blob:")) URL.revokeObjectURL(video.src);
+    video.removeAttribute("src");
+    video.load();
+    $("emptyVideo").classList.remove("hidden");
+    $("fileReady").classList.add("hidden");
+    $("noFile").classList.remove("hidden");
+    currentCode = "";
+    currentFile = null;
+    roomView.classList.add("hidden");
+    landing.classList.remove("hidden");
+  }
   message($("landingMessage"), data.message, true);
 });
 socket?.on("connect_error", () =>
   message(
-    $("landingMessage"),
-    "Could not reach the room server. Start Flask, then reload the page.",
+    currentCode ? $("roomMessage") : $("landingMessage"),
+    "Could not reach the room server. Checking the connection…",
     true,
   ),
 );
@@ -792,6 +859,10 @@ $("chatForm").addEventListener("submit", (event) => {
   });
 });
 socket?.on("file_available", (data) => {
+  if (incomingVideoOffer?.fingerprint === data.fingerprint) {
+    incomingVideoOffer = null;
+    $("downloadPrompt").classList.add("hidden");
+  }
   const uploadedByMe = socket && data.uploader_id === socket.id;
   setFile(data, !uploadedByMe, uploadedByMe);
   if (uploadedByMe) {
@@ -806,6 +877,7 @@ socket?.on("file_available", (data) => {
     $("promptTitle").textContent = "Join the movie night?";
     $("promptUseExisting").textContent = "Use a file on this device";
     $("promptDownload").textContent = "Download video";
+    $("dismissPrompt").textContent = "Later";
     $("promptText").textContent =
       `${data.name} is ready. Download it to watch along.`;
     $("downloadPrompt").classList.remove("hidden");
@@ -818,6 +890,7 @@ socket?.on("video_offer", (offer) => {
     `${offer.name} is being added to the room. Choose your copy to check it, or say you need a download.`;
   $("promptUseExisting").textContent = "I have it — choose my file";
   $("promptDownload").textContent = "I need a download";
+  $("dismissPrompt").textContent = "I’ll download later";
   $("downloadPrompt").classList.remove("hidden");
 });
 socket?.on("video_offer_progress", (progress) => {
@@ -837,6 +910,14 @@ socket?.on("playback", (state) => {
   latestPlayback = state;
   applyPlayback(state);
 });
+setInterval(() => {
+  if (socket?.connected && currentCode && currentFile && video.src) {
+    socket.emit("playback_sync", {
+      code: currentCode,
+      file_id: currentFile.id,
+    });
+  }
+}, 5000);
 
 // A reload creates a new Socket.IO connection. Rejoin the room remembered for
 // this tab instead of showing the landing page again.
@@ -877,10 +958,22 @@ function renderMembers(members) {
   );
 }
 function setFile(file, announce, uploadedByMe = false) {
+  if (currentFile && currentFile.id !== file.id) {
+    video.pause();
+    if (video.src.startsWith("blob:")) URL.revokeObjectURL(video.src);
+    video.removeAttribute("src");
+    video.load();
+    $("emptyVideo").classList.remove("hidden");
+    latestPlayback = {
+      paused: true,
+      time: 0,
+      file_id: file.id,
+    };
+  }
   currentFile = file;
   $("noFile").classList.add("hidden");
   $("fileReady").classList.remove("hidden");
-  $("fileChooserText").textContent = "Choose another video";
+  $("fileChooserText").textContent = "Choose another audio or video";
   $("fileName").textContent = file.name;
   $("fileStatus").textContent = uploadedByMe
     ? "Using your selected file"
@@ -931,11 +1024,13 @@ $("fileInput").addEventListener("change", async (event) => {
       `${API}/api/rooms/${currentCode}/reuse`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Room-Token": roomToken,
+        },
         body: JSON.stringify({
           fingerprint,
           name: file.name,
-          uploader_id: socket?.id || "",
         }),
       },
     );
@@ -985,10 +1080,11 @@ $("fileInput").addEventListener("change", async (event) => {
     );
     const form = new FormData();
     form.append("file", file);
-    form.append("uploader_id", socket?.id || "");
+    form.append("offer_id", offerId);
     const xhr = new XMLHttpRequest();
     const uploaded = await new Promise((resolve, reject) => {
       xhr.open("POST", `${API}/api/rooms/${currentCode}/upload`);
+      xhr.setRequestHeader("X-Room-Token", roomToken);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable)
           bar.style.width = `${Math.round((e.loaded / e.total) * 100)}%`;
@@ -1029,7 +1125,9 @@ async function downloadAndPlay() {
     const alreadyCached = Boolean(blob);
     let savedInBrowser = alreadyCached;
     if (!blob) {
-      const response = await fetch(`${API}/api/rooms/${currentCode}/download`);
+      const response = await fetch(`${API}/api/rooms/${currentCode}/download`, {
+        headers: { "X-Room-Token": roomToken },
+      });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.error || "Download failed.");
@@ -1145,7 +1243,7 @@ $("promptUseExisting").addEventListener("click", () => {
   $("existingFileInput").click();
 });
 $("dismissPrompt").addEventListener("click", () =>
-  $("downloadPrompt").classList.add("hidden"),
+  incomingVideoOffer ? replyToVideoOffer(false) : $("downloadPrompt").classList.add("hidden"),
 );
 $("copyCode").addEventListener("click", async () => {
   try {
@@ -1160,6 +1258,7 @@ function sendPlayback() {
   if (syncing || !socket || !currentCode || !video.src) return;
   socket.emit("playback", {
     code: currentCode,
+    file_id: currentFile?.id || null,
     paused: video.paused,
     time: video.currentTime,
   });
@@ -1173,6 +1272,7 @@ video.addEventListener("loadedmetadata", () => {
 function applyPlayback(state) {
   if (
     !video.src ||
+    (state.file_id && state.file_id !== currentFile?.id) ||
     video.readyState < HTMLMediaElement.HAVE_METADATA ||
     !Number.isFinite(Number(state.time))
   )
@@ -1200,8 +1300,7 @@ window.addEventListener("pagehide", () => {
   if (!currentCode) return;
 
   const body = new FormData();
-  body.append("client_id", clientId);
-  body.append("socket_id", socket?.id || "");
+  body.append("room_token", roomToken);
   const leaveUrl = `${API}/api/rooms/${currentCode}/leave`;
 
   // sendBeacon can finish this small request while the page is closing.
@@ -1209,10 +1308,13 @@ window.addEventListener("pagehide", () => {
   if (!navigator.sendBeacon?.(leaveUrl, body)) {
     fetch(leaveUrl, { method: "POST", body, keepalive: true }).catch(() => {});
   }
+  roomToken = "";
 });
 
 $("leaveRoom").addEventListener("click", () => {
   clearActiveRoom();
+  roomToken = "";
+  joinRequest = null;
   leaveLiveKitCall();
   if (currentCode && socket) socket.emit("leave_room", { code: currentCode });
   socket?.disconnect();
@@ -1232,7 +1334,7 @@ $("leaveRoom").addEventListener("click", () => {
   $("noFile").classList.remove("hidden");
   $("fileReady").classList.add("hidden");
   $("existingFileButton").classList.add("hidden");
-  $("fileChooserText").textContent = "Choose video";
+  $("fileChooserText").textContent = "Choose audio or video";
   $("fileName").textContent = "Video file";
   $("fileStatus").textContent = "Ready to download";
   $("downloadFile").classList.remove("hidden");

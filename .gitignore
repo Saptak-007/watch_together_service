@@ -2,6 +2,10 @@ __pycache__/
 .venv/
 uploads/*
 !uploads/.gitkeep
+video_index.sqlite3
+video_index.sqlite3-shm
+video_index.sqlite3-wal
+.data/
 .env
 .env.*
 !.env.example

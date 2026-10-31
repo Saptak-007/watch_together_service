@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
-
 :root {
   --bg: #10141d;
   --panel: #191f2b;
@@ -20,7 +18,7 @@ body {
   background:
     radial-gradient(ellipse at 72% 30%, #25213a 0, transparent 38%), var(--bg);
   color: var(--text);
-  font-family: "DM Sans", sans-serif;
+  font-family: system-ui, sans-serif;
   min-height: 100vh;
 }
 
@@ -43,7 +41,7 @@ body {
 .brand {
   text-decoration: none;
   color: var(--text);
-  font-family: "Space Grotesk", sans-serif;
+  font-family: system-ui, sans-serif;
   font-weight: 700;
   font-size: 21px;
   letter-spacing: -0.8px;
@@ -98,7 +96,7 @@ footer {
   border-radius: 8px;
   background: #10141d;
   color: var(--text);
-  font: 13px "DM Sans", sans-serif;
+  font: 13px system-ui, sans-serif;
   outline: none;
 }
 
@@ -138,7 +136,7 @@ p {
 
 h1 {
   font:
-    600 clamp(46px, 6vw, 72px) / 1.02 "Space Grotesk",
+    600 clamp(46px, 6vw, 72px) / 1.02 system-ui,
     sans-serif;
   letter-spacing: -4px;
   margin: 25px 0 18px;
@@ -166,7 +164,7 @@ h1 span {
   border-radius: 11px;
   padding: 13px 17px;
   font:
-    600 13px "DM Sans",
+    600 13px system-ui,
     sans-serif;
   cursor: pointer;
   transition:
@@ -235,7 +233,7 @@ h1 span {
   padding: 11px 10px;
   margin-top: 7px;
   font:
-    13px "DM Sans",
+    13px system-ui,
     sans-serif;
   outline: none;
 }
@@ -453,7 +451,7 @@ footer b {
 
 .room-heading h2 {
   font:
-    600 30px "Space Grotesk",
+    600 30px system-ui,
     sans-serif;
   letter-spacing: -1px;
   margin: 10px 0 0;
@@ -505,7 +503,7 @@ footer b {
 
 .empty-video h3 {
   font:
-    600 17px "Space Grotesk",
+    600 17px system-ui,
     sans-serif;
   margin: 13px 0 5px;
 }
@@ -558,7 +556,7 @@ footer b {
 
 .call-heading h3 {
   margin: 7px 0 5px;
-  font: 600 18px "Space Grotesk", sans-serif;
+  font: 600 18px system-ui, sans-serif;
 }
 
 .call-status {
@@ -652,7 +650,7 @@ footer b {
 
 .code-line strong {
   font:
-    600 27px "Space Grotesk",
+    600 27px system-ui,
     sans-serif;
   letter-spacing: 4px;
   color: var(--purple);
@@ -686,7 +684,7 @@ footer b {
 .panel-title h3,
 .file-panel h3 {
   font:
-    600 14px "Space Grotesk",
+    600 14px system-ui,
     sans-serif;
   margin: 0;
 }
@@ -928,7 +926,7 @@ footer b {
 
 .modal h2 {
   font:
-    600 26px "Space Grotesk",
+    600 26px system-ui,
     sans-serif;
   letter-spacing: -0.8px;
   margin: 10px 0;
