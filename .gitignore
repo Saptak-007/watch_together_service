@@ -3,4 +3,6 @@ __pycache__/
 uploads/*
 !uploads/.gitkeep
 .env
+.env.*
+!.env.example
 .vscode/

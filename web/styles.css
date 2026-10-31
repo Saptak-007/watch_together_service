@@ -236,6 +236,41 @@ h1 span {
   display: none !important;
 }
 
+.toast {
+  position: fixed;
+  z-index: 20;
+  left: 50%;
+  bottom: 24px;
+  padding: 11px 18px;
+  border: 1px solid #ffffff1a;
+  border-radius: 999px;
+  background: #252d3b;
+  box-shadow: 0 10px 32px #0006;
+  color: var(--text);
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .hero-art {
   height: 410px;
   position: relative;
@@ -481,6 +516,95 @@ footer b {
   gap: 7px;
 }
 
+.call-panel {
+  margin: 16px 4px 4px;
+  padding-top: 17px;
+  border-top: 1px solid var(--line);
+}
+
+.call-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.call-heading h3 {
+  margin: 7px 0 5px;
+  font: 600 18px "Space Grotesk", sans-serif;
+}
+
+.call-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.call-status.error {
+  color: #ff919a;
+}
+
+.call-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.button.small {
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+
+.call-participants {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.call-tile {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #0a0c11;
+}
+
+.call-tile-media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  background: radial-gradient(ellipse at center, #28233d, #10141d 75%);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.call-tile-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.call-tile-name {
+  overflow: hidden;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-audio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 .side-column {
   display: flex;
   flex-direction: column;
@@ -512,8 +636,9 @@ footer b {
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 7px;
-  width: 31px;
+  min-width: 52px;
   height: 31px;
+  padding: 0 9px;
   cursor: pointer;
 }
 
@@ -573,6 +698,87 @@ footer b {
   color: #c5b4ff;
   font-size: 11px;
   font-weight: 700;
+}
+
+.chat-panel {
+  min-width: 0;
+}
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 90px;
+  max-height: 280px;
+  margin-top: 12px;
+  overflow-y: auto;
+}
+
+.chat-message {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: #ffffff08;
+}
+
+.chat-message-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.chat-message-name {
+  overflow: hidden;
+  color: var(--mint);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-message-time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chat-message-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-status {
+  min-height: 14px;
+  margin: 6px 0;
+  color: #ff919a;
+  font-size: 10px;
+}
+
+.chat-form {
+  display: flex;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.chat-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #0d1119;
+  color: var(--text);
+  font: inherit;
+}
+
+.chat-form input:focus {
+  border-color: var(--purple);
+  outline: none;
 }
 
 .you-tag {
@@ -796,6 +1002,14 @@ footer b {
 
   .room-heading .button {
     padding: 10px;
+  }
+
+  .call-heading {
+    flex-direction: column;
+  }
+
+  .call-controls {
+    justify-content: flex-start;
   }
 
   .side-column {

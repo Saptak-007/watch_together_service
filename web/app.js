@@ -7,6 +7,7 @@ const socket =
   typeof window.io === "function"
     ? window.io(API || undefined, { autoConnect: false })
     : null;
+const liveKit = window.LivekitClient || null;
 const $ = (id) => document.getElementById(id);
 const landing = $("landing"),
   roomView = $("room"),
@@ -19,9 +20,28 @@ let currentCode = "",
   latestPlayback = { paused: true, time: 0 },
   syncing = false,
   promptPending = false;
+let liveKitRoom = null,
+  liveKitJoinAttempt = 0,
+  localCameraEnabled = false,
+  localMicrophoneEnabled = false,
+  mirroredCameraTrack = null,
+  cameraSourceStream = null,
+  cameraSourceVideo = null,
+  cameraCanvas = null,
+  cameraFrameRequest = null;
+const liveKitTiles = new Map();
 const ACTIVE_ROOM_KEY = "sidebyside.activeRoom";
 const CLIENT_ID_KEY = "sidebyside.clientId";
 const FINGERPRINT_CHUNK_SIZE = 8 * 1024 * 1024;
+let toastTimeout = null;
+
+function showToast(text) {
+  const toast = $("toast");
+  toast.textContent = text;
+  toast.classList.add("visible");
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => toast.classList.remove("visible"), 1800);
+}
 
 function cacheKeyForFile(file) {
   return file?.fingerprint || file?.id || "";
@@ -230,6 +250,364 @@ function showRoom(code) {
   $("roomCode").textContent = code;
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+
+function setCallStatus(text, isError = false) {
+  const status = $("callStatus");
+  status.textContent = text;
+  status.classList.toggle("error", isError);
+}
+
+function updateCallControls() {
+  const connected = Boolean(liveKitRoom);
+  const microphoneButton = $("toggleMicrophone");
+  const cameraButton = $("toggleCamera");
+  microphoneButton.disabled = !connected;
+  cameraButton.disabled = !connected;
+  microphoneButton.textContent = localMicrophoneEnabled
+    ? "Turn microphone off"
+    : "Turn microphone on";
+  cameraButton.textContent = localCameraEnabled
+    ? "Turn camera off"
+    : "Turn camera on";
+  microphoneButton.setAttribute("aria-pressed", String(localMicrophoneEnabled));
+  cameraButton.setAttribute("aria-pressed", String(localCameraEnabled));
+}
+
+function ensureCallTile(participant, isLocal = false) {
+  let entry = liveKitTiles.get(participant.identity);
+  if (entry) {
+    entry.name.textContent = isLocal
+      ? `You (${nickname})`
+      : participant.name || participant.identity;
+    return entry;
+  }
+
+  const tile = document.createElement("article");
+  tile.className = isLocal ? "call-tile call-tile-local" : "call-tile";
+  const media = document.createElement("div");
+  media.className = "call-tile-media";
+  const videoElement = document.createElement("video");
+  videoElement.autoplay = true;
+  videoElement.playsInline = true;
+  videoElement.muted = isLocal;
+  videoElement.classList.add("hidden");
+  const placeholder = document.createElement("span");
+  placeholder.textContent = "Camera is off";
+  videoElement.addEventListener("loadedmetadata", () => {
+    if (videoElement.videoWidth && videoElement.videoHeight) {
+      media.style.aspectRatio = `${videoElement.videoWidth} / ${videoElement.videoHeight}`;
+    }
+  });
+  const name = document.createElement("div");
+  name.className = "call-tile-name";
+  name.textContent = isLocal
+    ? `You (${nickname})`
+    : participant.name || participant.identity;
+  media.append(videoElement, placeholder);
+  tile.append(media, name);
+  $("callParticipants").append(tile);
+  entry = { tile, media, video: videoElement, placeholder, name };
+  liveKitTiles.set(participant.identity, entry);
+  return entry;
+}
+
+function removeCallTile(identity) {
+  const entry = liveKitTiles.get(identity);
+  if (!entry) return;
+  entry.video.srcObject = null;
+  entry.tile.remove();
+  liveKitTiles.delete(identity);
+}
+
+function showCallVideo(participant, track) {
+  const entry = ensureCallTile(participant, participant.isLocal);
+  track.attach(entry.video);
+  if (entry.video.videoWidth && entry.video.videoHeight) {
+    entry.media.style.aspectRatio = `${entry.video.videoWidth} / ${entry.video.videoHeight}`;
+  }
+  entry.video.classList.remove("hidden");
+  entry.placeholder.classList.add("hidden");
+}
+
+function hideCallVideo(participant, track) {
+  const entry = liveKitTiles.get(participant.identity);
+  if (!entry) return;
+  track.detach(entry.video);
+  entry.video.srcObject = null;
+  entry.media.style.aspectRatio = "";
+  entry.video.classList.add("hidden");
+  entry.placeholder.classList.remove("hidden");
+}
+
+async function startMirroredCamera() {
+  cameraSourceStream = await navigator.mediaDevices.getUserMedia({ video: true });
+  cameraSourceVideo = document.createElement("video");
+  cameraSourceVideo.muted = true;
+  cameraSourceVideo.playsInline = true;
+  cameraSourceVideo.srcObject = cameraSourceStream;
+  await cameraSourceVideo.play();
+
+  cameraCanvas = document.createElement("canvas");
+  const context = cameraCanvas.getContext("2d");
+  if (!context || !cameraCanvas.captureStream) {
+    throw new Error("This browser cannot create a mirrored camera stream.");
+  }
+  const drawMirroredFrame = () => {
+    if (!cameraSourceVideo || !cameraCanvas) return;
+    const width = cameraSourceVideo.videoWidth;
+    const height = cameraSourceVideo.videoHeight;
+    if (width && height) {
+      if (cameraCanvas.width !== width || cameraCanvas.height !== height) {
+        cameraCanvas.width = width;
+        cameraCanvas.height = height;
+      }
+      context.save();
+      context.translate(width, 0);
+      context.scale(-1, 1);
+      context.drawImage(cameraSourceVideo, 0, 0, width, height);
+      context.restore();
+    }
+    cameraFrameRequest = requestAnimationFrame(drawMirroredFrame);
+  };
+  drawMirroredFrame();
+
+  const outgoingTrack = cameraCanvas.captureStream(24).getVideoTracks()[0];
+  if (!outgoingTrack) throw new Error("Could not create the mirrored camera track.");
+  mirroredCameraTrack = new liveKit.LocalVideoTrack(outgoingTrack);
+  await liveKitRoom.localParticipant.publishTrack(mirroredCameraTrack, {
+    source: liveKit.Track.Source.Camera,
+  });
+}
+
+async function stopMirroredCamera() {
+  if (cameraFrameRequest !== null) cancelAnimationFrame(cameraFrameRequest);
+  cameraFrameRequest = null;
+  if (mirroredCameraTrack && liveKitRoom) {
+    try {
+      await liveKitRoom.localParticipant.unpublishTrack(mirroredCameraTrack, true);
+    } catch (error) {
+      console.warn("Could not unpublish the mirrored camera track:", error);
+    }
+  }
+  mirroredCameraTrack = null;
+  cameraSourceStream?.getTracks().forEach((track) => track.stop());
+  cameraSourceStream = null;
+  if (cameraSourceVideo) cameraSourceVideo.srcObject = null;
+  cameraSourceVideo = null;
+  cameraCanvas = null;
+}
+
+async function joinLiveKitCall(code) {
+  const attempt = ++liveKitJoinAttempt;
+  if (!liveKit?.Room || !liveKit?.RoomEvent) {
+    setCallStatus(
+      "The call library did not load. You can still watch together; reload the page to try again.",
+      true,
+    );
+    return;
+  }
+
+  if (liveKitRoom) liveKitRoom.disconnect();
+  liveKitRoom = null;
+  localCameraEnabled = false;
+  localMicrophoneEnabled = false;
+  $("callParticipants").replaceChildren();
+  $("enableCallAudio").classList.add("hidden");
+  updateCallControls();
+  setCallStatus("Connecting to the room call…");
+
+  let connectingRoom = null;
+  try {
+    const tokenResponse = await fetch(`${API}/api/rooms/${code}/livekit-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ socket_id: socket?.id || "", client_id: clientId }),
+    });
+    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok) {
+      throw new Error(tokenData.error || "Could not prepare the room call.");
+    }
+    if (attempt !== liveKitJoinAttempt) return;
+
+    const room = new liveKit.Room({ adaptiveStream: true, dynacast: true });
+    connectingRoom = room;
+    room.on(liveKit.RoomEvent.ParticipantConnected, (participant) => {
+      ensureCallTile(participant);
+    });
+    room.on(liveKit.RoomEvent.ParticipantDisconnected, (participant) => {
+      removeCallTile(participant.identity);
+    });
+    room.on(
+      liveKit.RoomEvent.TrackSubscribed,
+      (track, _publication, participant) => {
+        if (track.kind === liveKit.Track.Kind.Video) {
+          showCallVideo(participant, track);
+        } else if (track.kind === liveKit.Track.Kind.Audio) {
+          const audioElement = track.attach();
+          audioElement.autoplay = true;
+          $("callAudio").append(audioElement);
+        }
+      },
+    );
+    room.on(
+      liveKit.RoomEvent.TrackUnsubscribed,
+      (track, _publication, participant) => {
+        if (track.kind === liveKit.Track.Kind.Video) {
+          hideCallVideo(participant, track);
+        } else {
+          const detached = track.detach();
+          for (const element of Array.isArray(detached) ? detached : [detached]) {
+            element?.remove();
+          }
+        }
+      },
+    );
+    room.on(liveKit.RoomEvent.TrackMuted, (publication, participant) => {
+      if (
+        publication.source === liveKit.Track.Source.Camera &&
+        publication.track
+      ) {
+        hideCallVideo(participant, publication.track);
+      }
+    });
+    room.on(liveKit.RoomEvent.TrackUnmuted, (publication, participant) => {
+      if (
+        publication.source === liveKit.Track.Source.Camera &&
+        publication.track
+      ) {
+        showCallVideo(participant, publication.track);
+      }
+    });
+    room.on(liveKit.RoomEvent.MediaDevicesError, (error) => {
+      setCallStatus(
+        `Call device problem: ${error?.message || "check camera and microphone permissions."}`,
+        true,
+      );
+    });
+    room.on(liveKit.RoomEvent.AudioPlaybackStatusChanged, () => {
+      $("enableCallAudio").classList.toggle("hidden", room.canPlaybackAudio);
+    });
+    room.on(liveKit.RoomEvent.Disconnected, () => {
+      if (liveKitRoom !== room) return;
+      liveKitRoom = null;
+      void stopMirroredCamera();
+      localCameraEnabled = false;
+      localMicrophoneEnabled = false;
+      updateCallControls();
+      setCallStatus("The call disconnected. You can remain in the watch room.", true);
+    });
+
+    await room.connect(tokenData.server_url, tokenData.participant_token);
+    if (attempt !== liveKitJoinAttempt) {
+      room.disconnect();
+      return;
+    }
+    liveKitRoom = room;
+    ensureCallTile(room.localParticipant, true);
+    for (const participant of room.remoteParticipants.values()) {
+      ensureCallTile(participant);
+    }
+    updateCallControls();
+    setCallStatus("Call connected. Camera and microphone are off until you turn them on.");
+  } catch (error) {
+    if (attempt !== liveKitJoinAttempt) return;
+    connectingRoom?.disconnect();
+    liveKitRoom = null;
+    localCameraEnabled = false;
+    localMicrophoneEnabled = false;
+    updateCallControls();
+    setCallStatus(
+      `${error.message || "The call could not connect."} You can still watch together.`,
+      true,
+    );
+  }
+}
+
+function leaveLiveKitCall() {
+  liveKitJoinAttempt += 1;
+  const room = liveKitRoom;
+  liveKitRoom = null;
+  localCameraEnabled = false;
+  localMicrophoneEnabled = false;
+  if (room) room.disconnect();
+  if (cameraFrameRequest !== null) cancelAnimationFrame(cameraFrameRequest);
+  cameraFrameRequest = null;
+  cameraSourceStream?.getTracks().forEach((track) => track.stop());
+  cameraSourceStream = null;
+  cameraSourceVideo = null;
+  cameraCanvas = null;
+  mirroredCameraTrack = null;
+  for (const identity of liveKitTiles.keys()) removeCallTile(identity);
+  $("callAudio").replaceChildren();
+  $("enableCallAudio").classList.add("hidden");
+  updateCallControls();
+}
+
+$("toggleMicrophone").addEventListener("click", async () => {
+  if (!liveKitRoom) return;
+  const nextState = !localMicrophoneEnabled;
+  try {
+    await liveKitRoom.localParticipant.setMicrophoneEnabled(nextState);
+    localMicrophoneEnabled = nextState;
+    updateCallControls();
+    setCallStatus(
+      `Call connected. Microphone ${nextState ? "on" : "off"}; camera ${localCameraEnabled ? "on" : "off"}.`,
+    );
+  } catch {
+    setCallStatus(
+      `Could not turn on the microphone. It may already be in use in another tab or app. Turn it off there and try again. You can still watch together.`,
+      true,
+    );
+  }
+});
+
+$("toggleCamera").addEventListener("click", async () => {
+  if (!liveKitRoom) return;
+  const nextState = !localCameraEnabled;
+  try {
+    if (nextState) {
+      await startMirroredCamera();
+    } else {
+      await stopMirroredCamera();
+    }
+    localCameraEnabled = nextState;
+    updateCallControls();
+    if (nextState) {
+      const publication = liveKitRoom.localParticipant.getTrackPublication(
+        liveKit.Track.Source.Camera,
+      );
+      if (publication?.track) showCallVideo(liveKitRoom.localParticipant, publication.track);
+    } else {
+      const entry = liveKitTiles.get(liveKitRoom.localParticipant.identity);
+      if (entry) {
+        entry.video.srcObject = null;
+        entry.media.style.aspectRatio = "";
+        entry.video.classList.add("hidden");
+        entry.placeholder.classList.remove("hidden");
+      }
+    }
+    setCallStatus(
+      `Call connected. Microphone ${localMicrophoneEnabled ? "on" : "off"}; camera ${nextState ? "on" : "off"}.`,
+    );
+  } catch {
+    await stopMirroredCamera();
+    setCallStatus(
+      `Could not turn on the camera. It may already be in use in another tab or app. Turn it off there and try again. You can still watch together.`,
+      true,
+    );
+  }
+});
+
+$("enableCallAudio").addEventListener("click", async () => {
+  if (!liveKitRoom) return;
+  try {
+    await liveKitRoom.startAudio();
+    $("enableCallAudio").classList.add("hidden");
+  } catch {
+    setCallStatus("Tap the audio button again to allow call audio in this browser.", true);
+  }
+});
+
 function connectAndJoin(code, name) {
   nickname = name;
   if (!socket) {
@@ -309,8 +687,34 @@ $("joinForm").addEventListener("submit", (event) => {
   connectAndJoin(code, name.slice(0, 24));
 });
 
+function renderChatMessage(data) {
+  const item = document.createElement("article");
+  item.className = "chat-message";
+  const heading = document.createElement("div");
+  heading.className = "chat-message-heading";
+  const sender = document.createElement("span");
+  sender.className = "chat-message-name";
+  sender.textContent = data.nickname || "Room member";
+  const time = document.createElement("time");
+  time.className = "chat-message-time";
+  const sentAt = new Date(data.sent_at);
+  time.textContent = Number.isNaN(sentAt.getTime())
+    ? ""
+    : sentAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const text = document.createElement("p");
+  text.className = "chat-message-text";
+  text.textContent = data.text || "";
+  heading.append(sender, time);
+  item.append(heading, text);
+  $("chatMessages").append(item);
+}
+
 socket?.on("joined", (data) => {
   showRoom(data.code);
+  $("chatMessages").replaceChildren();
+  $("chatStatus").textContent = "";
+  (data.chat_messages || []).forEach(renderChatMessage);
+  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
   renderMembers(data.members);
   latestPlayback = data.playback || { paused: true, time: 0 };
   if (data.file) {
@@ -326,6 +730,7 @@ socket?.on("joined", (data) => {
   }
   if (currentFile) applyPlayback(latestPlayback);
   message($("roomMessage"), "You’re in. Share the code so others can join.");
+  joinLiveKitCall(data.code);
 });
 socket?.on("join_error", (data) => {
   clearActiveRoom();
@@ -339,6 +744,29 @@ socket?.on("connect_error", () =>
   ),
 );
 socket?.on("members", (data) => renderMembers(data.members));
+socket?.on("chat_message", (data) => {
+  renderChatMessage(data);
+  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+});
+$("chatForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = $("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!socket?.connected || !currentCode) {
+    $("chatStatus").textContent = "Reconnect to the room before sending a message.";
+    return;
+  }
+  socket.emit("chat_send", { code: currentCode, text }, (response) => {
+    if (!response?.ok) {
+      $("chatStatus").textContent = response?.error || "The message could not be sent.";
+      return;
+    }
+    input.value = "";
+    $("chatStatus").textContent = "";
+    input.focus();
+  });
+});
 socket?.on("file_available", (data) => {
   const uploadedByMe = socket && data.uploader_id === socket.id;
   setFile(data, !uploadedByMe, uploadedByMe);
@@ -692,7 +1120,7 @@ $("dismissPrompt").addEventListener("click", () =>
 $("copyCode").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(currentCode);
-    message($("roomMessage"), "Room code copied.");
+    showToast("Copied!");
   } catch {
     message($("roomMessage"), `Share this code: ${currentCode}`);
   }
@@ -738,6 +1166,7 @@ function applyPlayback(state) {
 }
 
 window.addEventListener("pagehide", () => {
+  leaveLiveKitCall();
   if (!currentCode) return;
 
   const body = new FormData();
@@ -754,6 +1183,7 @@ window.addEventListener("pagehide", () => {
 
 $("leaveRoom").addEventListener("click", () => {
   clearActiveRoom();
+  leaveLiveKitCall();
   if (currentCode && socket) socket.emit("leave_room", { code: currentCode });
   socket?.disconnect();
   if (video.src.startsWith("blob:")) URL.revokeObjectURL(video.src);

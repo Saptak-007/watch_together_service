@@ -4,14 +4,37 @@ import secrets
 import sqlite3
 import string
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from livekit import api as livekit_api
 from werkzeug.utils import secure_filename
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def load_environment_file(path):
+    """Load simple NAME=value settings, without replacing OS environment values."""
+    if not path.is_file():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if name.isidentifier():
+            os.environ.setdefault(name, value)
+
+
+load_environment_file(BASE_DIR / ".env")
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 VIDEO_INDEX_PATH = BASE_DIR / "video_index.sqlite3"
@@ -211,11 +234,64 @@ def create_room():
     code = make_code()
     rooms[code] = {
         "members": {},
+        "chat_messages": [],
         "file": None,
         "pending_offer": None,
         "playback": {"paused": True, "time": 0},
     }
     return jsonify({"code": code})
+
+
+@app.post("/api/rooms/<code>/livekit-token")
+def create_livekit_token(code):
+    """Issue a short-lived call token to a member already in this watch room."""
+    code = code.upper()
+    room = rooms.get(code)
+    if not room:
+        return jsonify({"error": "That room does not exist or has expired."}), 404
+
+    data = request.get_json(silent=True) or {}
+    socket_id = str(data.get("socket_id", "")).strip()
+    client_id = str(data.get("client_id", "")).strip()
+    member = room["members"].get(socket_id)
+    if not member or not client_id or member.get("client_id") != client_id:
+        return jsonify({"error": "Join the watch room before joining its call."}), 403
+
+    livekit_url = os.environ.get("LIVEKIT_URL", "").strip()
+    api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
+    api_secret = os.environ.get("LIVEKIT_API_SECRET", "").strip()
+    if not livekit_url or not api_key or not api_secret:
+        return jsonify(
+            {
+                "error": "The video call is not configured yet. Add the LiveKit settings to the Flask server."
+            }
+        ), 503
+    if not livekit_url.startswith("wss://"):
+        return jsonify({"error": "The LiveKit server address must start with wss://."}), 503
+
+    identity = f"participant_{secrets.token_hex(16)}"
+    try:
+        token = (
+            livekit_api.AccessToken(api_key, api_secret)
+            .with_identity(identity)
+            .with_name(member["nickname"])
+            .with_ttl(timedelta(hours=6))
+            .with_grants(
+                livekit_api.VideoGrants(
+                    room_join=True,
+                    room=code,
+                    can_publish=True,
+                    can_subscribe=True,
+                    can_publish_data=False,
+                )
+            )
+            .to_jwt()
+        )
+    except Exception:
+        app.logger.exception("Could not create a LiveKit participant token")
+        return jsonify({"error": "Could not prepare the video call. Try again."}), 500
+
+    return jsonify({"server_url": livekit_url, "participant_token": token})
 
 
 @app.post("/api/rooms/<code>/upload")
@@ -405,6 +481,7 @@ def on_join(data):
                 else None
             ),
             "playback": room["playback"],
+            "chat_messages": room["chat_messages"],
         },
     )
     if pending_offer and request.sid != pending_offer["uploader_id"]:
@@ -530,6 +607,32 @@ def on_playback(data):
     emit("playback", room["playback"], to=code, include_self=False)
 
 
+@socketio.on("chat_send")
+def on_chat_send(data):
+    data = data or {}
+    code = str(data.get("code", "")).strip().upper()
+    room = rooms.get(code)
+    member = room["members"].get(request.sid) if room else None
+    if not member:
+        return {"ok": False, "error": "Join the room before sending a message."}
+
+    text = str(data.get("text", "")).strip()
+    if not text:
+        return {"ok": False, "error": "Type a message first."}
+    if len(text) > 1000:
+        return {"ok": False, "error": "Messages must be 1,000 characters or fewer."}
+
+    message = {
+        "nickname": member["nickname"],
+        "text": text,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+    room["chat_messages"].append(message)
+    del room["chat_messages"][:-200]
+    socketio.emit("chat_message", message, to=code)
+    return {"ok": True}
+
+
 @socketio.on("disconnect")
 def on_disconnect():
     for code, room in list(rooms.items()):
@@ -546,4 +649,5 @@ if __name__ == "__main__":
         port=port,
         debug=True,
         allow_unsafe_werkzeug=True,
+        load_dotenv=False,
     )

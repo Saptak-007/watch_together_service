@@ -109,6 +109,30 @@
               <span><i class="live-dot"></i> SYNCED PLAYBACK</span
               ><span>Volume stays yours</span>
             </div>
+            <section class="call-panel" aria-labelledby="callTitle">
+              <div class="call-heading">
+                <div>
+                  <div class="panel-label">OPTIONAL ROOM CALL</div>
+                  <h3 id="callTitle">Talk while you watch</h3>
+                  <p id="callStatus" class="call-status" role="status">
+                    Camera and microphone start off. Turn them on whenever you’re ready.
+                  </p>
+                </div>
+                <div class="call-controls">
+                  <button id="toggleMicrophone" class="button secondary small" type="button" disabled>
+                    Turn microphone on
+                  </button>
+                  <button id="toggleCamera" class="button secondary small" type="button" disabled>
+                    Turn camera on
+                  </button>
+                </div>
+              </div>
+              <button id="enableCallAudio" class="button secondary small hidden" type="button">
+                Tap to enable call audio
+              </button>
+              <div id="callParticipants" class="call-participants" aria-live="polite"></div>
+              <div id="callAudio" class="call-audio" aria-hidden="true"></div>
+            </section>
           </section>
           <aside class="side-column">
             <section class="panel room-code-panel">
@@ -119,8 +143,9 @@
                   id="copyCode"
                   class="icon-button"
                   title="Copy room code"
+                  aria-label="Copy room code"
                 >
-                  ▢
+                  Copy
                 </button>
               </div>
               <p>Friends enter this code with a nickname to join.</p>
@@ -131,6 +156,30 @@
                 <span id="memberCount" class="count-pill">0</span>
               </div>
               <ul id="memberList" class="member-list"></ul>
+            </section>
+            <section class="panel chat-panel" aria-labelledby="chatTitle">
+              <div class="panel-title">
+                <h3 id="chatTitle">Messages</h3>
+              </div>
+              <div
+                id="chatMessages"
+                class="chat-messages"
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions"
+              ></div>
+              <p id="chatStatus" class="chat-status" role="status"></p>
+              <form id="chatForm" class="chat-form">
+                <label class="visually-hidden" for="chatInput">Write a message</label>
+                <input
+                  id="chatInput"
+                  type="text"
+                  maxlength="1000"
+                  placeholder="Write a message…"
+                  autocomplete="off"
+                />
+                <button class="button primary small" type="submit">Send</button>
+              </form>
             </section>
             <section id="filePanel" class="panel file-panel">
               <div class="panel-label">THE MOVIE</div>
@@ -178,6 +227,7 @@
         ><span>Play together, wherever you are <b>✦</b></span>
       </footer>
     </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <div
       id="downloadPrompt"
       class="modal-backdrop hidden"
@@ -204,6 +254,7 @@
       </div>
     </div>
     <script src="/vendor/socket.io.min.js"></script>
+    <script src="/vendor/livekit-client.umd.js"></script>
     <script src="/config.js"></script>
     <script src="/app.js"></script>
   </body>
