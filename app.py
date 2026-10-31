@@ -217,6 +217,22 @@ def make_code():
             return code
 
 
+def check_access_code(provided_code):
+    expected_code = os.environ.get("SOPHISTICATED_CODE", "").strip()
+    if not expected_code:
+        return (
+            "Room access is not configured on the server. Set SOPHISTICATED_CODE.",
+            503,
+        )
+
+    provided_code = str(provided_code or "").strip()
+    if not secrets.compare_digest(
+        provided_code.encode("utf-8"), expected_code.encode("utf-8")
+    ):
+        return "The shared access code is incorrect.", 403
+    return None
+
+
 def public_members(room):
     return [
         {"id": sid, "nickname": member["nickname"]}
@@ -231,6 +247,11 @@ def index():
 
 @app.post("/api/rooms")
 def create_room():
+    data = request.get_json(silent=True) or {}
+    access_error = check_access_code(data.get("access_code"))
+    if access_error:
+        return jsonify({"error": access_error[0]}), access_error[1]
+
     code = make_code()
     rooms[code] = {
         "members": {},
@@ -430,9 +451,15 @@ def connected():
 
 @socketio.on("join_room")
 def on_join(data):
-    code = str((data or {}).get("code", "")).strip().upper()
-    nickname = str((data or {}).get("nickname", "")).strip()[:24]
-    client_id = str((data or {}).get("client_id", "")).strip()[:100]
+    data = data or {}
+    access_error = check_access_code(data.get("access_code"))
+    if access_error:
+        emit("join_error", {"message": access_error[0]})
+        return
+
+    code = str(data.get("code", "")).strip().upper()
+    nickname = str(data.get("nickname", "")).strip()[:24]
+    client_id = str(data.get("client_id", "")).strip()[:100]
     room = rooms.get(code)
     if not room:
         emit(

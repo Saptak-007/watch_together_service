@@ -154,9 +154,12 @@ function getClientId() {
 
 const clientId = getClientId();
 
-function saveActiveRoom(code, name) {
+function saveActiveRoom(code, name, accessCode) {
   try {
-    sessionStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify({ code, name }));
+    sessionStorage.setItem(
+      ACTIVE_ROOM_KEY,
+      JSON.stringify({ code, name, accessCode }),
+    );
   } catch {
     // The room still works if this browser does not allow session storage.
   }
@@ -608,7 +611,11 @@ $("enableCallAudio").addEventListener("click", async () => {
   }
 });
 
-function connectAndJoin(code, name) {
+function connectAndJoin(code, name, accessCode = $("accessCode").value.trim()) {
+  if (!accessCode) {
+    message($("landingMessage"), "Enter the shared access code.", true);
+    return;
+  }
   nickname = name;
   if (!socket) {
     message(
@@ -618,11 +625,16 @@ function connectAndJoin(code, name) {
     );
     return;
   }
-  saveActiveRoom(code, name);
+  saveActiveRoom(code, name, accessCode);
   message($("landingMessage"), "Connecting to the room…");
   if (!socket.connected) socket.connect();
   const joinWhenReady = () =>
-    socket.emit("join_room", { code, nickname, client_id: clientId });
+    socket.emit("join_room", {
+      code,
+      nickname,
+      client_id: clientId,
+      access_code: accessCode,
+    });
   if (socket.connected) joinWhenReady();
   else socket.once("connect", joinWhenReady);
 }
@@ -638,6 +650,7 @@ $("createRoom").addEventListener("click", () => {
 $("createForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = $("createNickname").value.trim();
+  const accessCode = $("accessCode").value.trim();
   if (!name) {
     return message(
       $("landingMessage"),
@@ -645,14 +658,21 @@ $("createForm").addEventListener("submit", async (event) => {
       true,
     );
   }
+  if (!accessCode) {
+    return message($("landingMessage"), "Enter the shared access code.", true);
+  }
   const button = event.currentTarget.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
-    const response = await fetch(`${API}/api/rooms`, { method: "POST" });
+    const response = await fetch(`${API}/api/rooms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_code: accessCode }),
+    });
     const result = await response.json();
     if (!response.ok)
       throw new Error(result.error || "Could not create a room.");
-    connectAndJoin(result.code, name.slice(0, 24));
+    connectAndJoin(result.code, name.slice(0, 24), accessCode);
   } catch (error) {
     message($("landingMessage"), error.message, true);
   } finally {
@@ -675,7 +695,8 @@ $("joinCode").addEventListener("input", (event) => {
 $("joinForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const code = $("joinCode").value.trim(),
-    name = $("joinNickname").value.trim();
+    name = $("joinNickname").value.trim(),
+    accessCode = $("accessCode").value.trim();
   if (code.length !== 6)
     return message(
       $("landingMessage"),
@@ -684,7 +705,9 @@ $("joinForm").addEventListener("submit", (event) => {
     );
   if (!name)
     return message($("landingMessage"), "Enter a nickname to join.", true);
-  connectAndJoin(code, name.slice(0, 24));
+  if (!accessCode)
+    return message($("landingMessage"), "Enter the shared access code.", true);
+  connectAndJoin(code, name.slice(0, 24), accessCode);
 });
 
 function renderChatMessage(data) {
@@ -710,6 +733,7 @@ function renderChatMessage(data) {
 }
 
 socket?.on("joined", (data) => {
+  $("accessCode").value = "";
   showRoom(data.code);
   $("chatMessages").replaceChildren();
   $("chatStatus").textContent = "";
@@ -818,8 +842,14 @@ socket?.on("playback", (state) => {
 // this tab instead of showing the landing page again.
 try {
   const savedRoom = JSON.parse(sessionStorage.getItem(ACTIVE_ROOM_KEY) || "null");
-  if (savedRoom?.code && savedRoom?.name) {
-    connectAndJoin(savedRoom.code, savedRoom.name);
+  if (savedRoom?.code && savedRoom?.name && savedRoom?.accessCode) {
+    connectAndJoin(savedRoom.code, savedRoom.name, savedRoom.accessCode);
+  } else if (savedRoom?.code && savedRoom?.name) {
+    clearActiveRoom();
+    message(
+      $("landingMessage"),
+      "Enter the shared access code to rejoin your previous room.",
+    );
   }
 } catch {
   clearActiveRoom();

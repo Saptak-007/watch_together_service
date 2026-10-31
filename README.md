@@ -60,10 +60,12 @@ separately to LiveKit; the movie file is not sent to LiveKit.
    project. The free Build plan is enough to try the feature.
 2. Open the project settings and copy its WebSocket URL, API key, and API
    secret. The URL starts with `wss://`.
-3. Copy `.env.example` to `.env` and enter these values in `.env`. Never put
-   the API secret in browser JavaScript or commit it to GitHub:
+3. Add the settings below to your local `.env` file. Choose a private shared
+   room access code for `SOPHISTICATED_CODE`. Never hardcode the LiveKit API
+   secret or shared access code in browser JavaScript or commit them to GitHub:
 
    ```text
+   SOPHISTICATED_CODE=choose-a-private-shared-code
    LIVEKIT_URL=wss://your-project.livekit.cloud
    LIVEKIT_API_KEY=your-project-api-key
    LIVEKIT_API_SECRET=your-project-api-secret
@@ -71,7 +73,9 @@ separately to LiveKit; the movie file is not sent to LiveKit.
 
 Flask loads `.env` automatically when it starts. The `.env` file is ignored by
 Git, so its secrets stay on your computer. For Render, add the same names in
-the service's Environment settings and enter the values from LiveKit Cloud.
+the service's Environment settings. Enter your chosen access code for
+`SOPHISTICATED_CODE` and the values from LiveKit Cloud for the three LiveKit
+settings.
 
 ### Install and run
 
