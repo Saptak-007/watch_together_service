@@ -87,6 +87,43 @@ footer {
   letter-spacing: 1px;
 }
 
+.access-code-form {
+  max-width: 380px;
+}
+
+.access-code-form > .button {
+  margin-top: 10px;
+}
+
+.access-accepted {
+  max-width: 380px;
+  margin: 14px 0 0;
+  color: var(--mint);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.access-accepted.is-admin {
+  color: #d9ceff;
+  text-shadow: 0 0 16px #a991ff44;
+}
+
+.access-code-form {
+  max-width: 380px;
+}
+
+.access-code-form > .button {
+  margin-top: 10px;
+}
+
+.access-accepted {
+  max-width: 380px;
+  margin: 14px 0 0;
+  color: var(--mint);
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .access-code-field input {
   display: block;
   width: 100%;
@@ -447,6 +484,80 @@ footer b {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 22px;
+}
+
+.room-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-status-badge {
+  padding: 8px 11px;
+  border: 1px solid #a991ff55;
+  border-radius: 999px;
+  background: #a991ff12;
+  color: #d9ceff;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.8px;
+  box-shadow: 0 0 16px #a991ff16;
+}
+
+.core-team-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: -8px 0 20px;
+  padding: 13px 18px;
+  border: 1px solid #b69cff55;
+  border-radius: 12px;
+  background:
+    radial-gradient(ellipse at center, #a991ff21, transparent 72%),
+    #191f2bdb;
+  color: #d9ceff;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 1.4px;
+  text-align: center;
+  text-transform: uppercase;
+  box-shadow: 0 0 24px #a991ff14;
+}
+
+.core-team-banner.is-assembling {
+  animation: core-team-assembled 900ms ease-out both;
+}
+
+.core-team-mark {
+  color: var(--mint);
+  text-shadow: 0 0 12px #89efc580;
+}
+
+@keyframes core-team-assembled {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+    box-shadow: 0 0 0 #a991ff00;
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(0) scale(1.015);
+    box-shadow: 0 0 32px #a991ff55;
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 24px #a991ff14;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .core-team-banner.is-assembling {
+    animation: none;
+  }
 }
 
 .room-heading h2 {

@@ -30,17 +30,23 @@
             Bring your people together. Pick a video, share a room code, and
             press play as one.
           </p>
-          <label class="access-code-field">
-            SHARED ACCESS CODE
-            <input
-              id="accessCode"
-              type="password"
-              placeholder="Enter the shared code"
-              autocomplete="off"
-              required
-            />
-          </label>
-          <div class="hero-actions">
+          <form id="accessCodeForm" class="access-code-form">
+            <label class="access-code-field">
+              SHARED ACCESS CODE
+              <input
+                id="accessCode"
+                type="password"
+                placeholder="Enter the shared code"
+                autocomplete="off"
+                required
+              />
+            </label>
+            <button id="verifyAccess" class="button primary" type="submit">
+              Continue <span>→</span>
+            </button>
+          </form>
+          <p id="accessAccepted" class="access-accepted hidden" role="status"></p>
+          <div id="heroActions" class="hero-actions hidden">
             <button id="createRoom" class="button primary">
               Create a room <span>↗</span>
             </button>
@@ -107,7 +113,22 @@
             </div>
             <h2>Movie night is on.</h2>
           </div>
-          <button id="leaveRoom" class="button ghost">Leave room</button>
+          <div class="room-heading-actions">
+            <span id="adminStatusBadge" class="admin-status-badge hidden">
+              ✦ ADMIN PRIVILEGES GRANTED
+            </span>
+            <button id="leaveRoom" class="button ghost">Leave room</button>
+          </div>
+        </div>
+        <div
+          id="coreTeamBanner"
+          class="core-team-banner hidden"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="core-team-mark" aria-hidden="true">✦</span>
+          <span>cse_core_team assembled</span>
+          <span class="core-team-mark" aria-hidden="true">✦</span>
         </div>
         <div class="room-grid">
           <section class="player-panel panel">

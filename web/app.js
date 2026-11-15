@@ -16,6 +16,8 @@ const videoPlayer = $("videoPlayer");
 let currentCode = "",
   nickname = "",
   roomToken = "",
+  accessValidated = false,
+  accessIsAdmin = false,
   joinRequest = null,
   currentFile = null,
   incomingVideoOffer = null,
@@ -686,7 +688,81 @@ socket?.on("disconnect", () => {
   }
 });
 
+function hideAccessActions() {
+  accessValidated = false;
+  accessIsAdmin = false;
+  $("heroActions").classList.add("hidden");
+  $("accessAccepted").classList.add("hidden");
+  $("accessAccepted").classList.remove("is-admin");
+  $("createForm").classList.add("hidden");
+  $("joinForm").classList.add("hidden");
+}
+
+function resetAccessGate(clearCode = true) {
+  hideAccessActions();
+  $("accessCodeForm").classList.remove("hidden");
+  if (clearCode) $("accessCode").value = "";
+}
+
+function setCoreTeamStatus(assembled, animate = false) {
+  const banner = $("coreTeamBanner");
+  banner.classList.toggle("hidden", !assembled);
+  banner.classList.remove("is-assembling");
+  if (!assembled || !animate) return;
+  void banner.offsetWidth;
+  banner.classList.add("is-assembling");
+  setTimeout(() => banner.classList.remove("is-assembling"), 1000);
+}
+
+$("accessCode").addEventListener("input", () => {
+  hideAccessActions();
+  message($("landingMessage"), "");
+});
+
+$("accessCodeForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const accessCode = $("accessCode").value.trim();
+  if (!accessCode) {
+    message($("landingMessage"), "Enter the shared access code.", true);
+    return;
+  }
+
+  const button = $("verifyAccess");
+  const input = $("accessCode");
+  button.disabled = true;
+  input.disabled = true;
+  button.textContent = "Checking…";
+  message($("landingMessage"), "Checking access code…");
+  try {
+    const response = await fetch(`${API}/api/access/validate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_code: accessCode }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "The access code could not be checked.");
+
+    accessValidated = true;
+    accessIsAdmin = Boolean(result.is_admin);
+    $("accessAccepted").textContent = result.message;
+    $("accessAccepted").classList.toggle("is-admin", accessIsAdmin);
+    $("accessAccepted").classList.remove("hidden");
+    $("accessCodeForm").classList.add("hidden");
+    $("heroActions").classList.remove("hidden");
+    message($("landingMessage"), "");
+  } catch (error) {
+    hideAccessActions();
+    $("accessCodeForm").classList.remove("hidden");
+    message($("landingMessage"), error.message, true);
+  } finally {
+    button.disabled = false;
+    input.disabled = false;
+    button.innerHTML = 'Continue <span>→</span>';
+  }
+});
+
 $("createRoom").addEventListener("click", () => {
+  if (!accessValidated) return;
   $("joinForm").classList.add("hidden");
   $("createForm").classList.toggle("hidden");
   if (!$("createForm").classList.contains("hidden")) {
@@ -708,6 +784,9 @@ $("createForm").addEventListener("submit", async (event) => {
   if (!accessCode) {
     return message($("landingMessage"), "Enter the shared access code.", true);
   }
+  if (!accessValidated) {
+    return message($("landingMessage"), "Verify the shared access code first.", true);
+  }
   const button = event.currentTarget.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
@@ -721,12 +800,14 @@ $("createForm").addEventListener("submit", async (event) => {
       throw new Error(result.error || "Could not create a room.");
     connectAndJoin(result.code, name.slice(0, 24), accessCode);
   } catch (error) {
+    if (/admin code already in use/i.test(error.message)) resetAccessGate(false);
     message($("landingMessage"), error.message, true);
   } finally {
     button.disabled = false;
   }
 });
 $("showJoin").addEventListener("click", () => {
+  if (!accessValidated) return;
   $("createForm").classList.add("hidden");
   $("joinForm").classList.toggle("hidden");
   if (!$("joinForm").classList.contains("hidden")) {
@@ -754,6 +835,8 @@ $("joinForm").addEventListener("submit", (event) => {
     return message($("landingMessage"), "Enter a nickname to join.", true);
   if (!accessCode)
     return message($("landingMessage"), "Enter the shared access code.", true);
+  if (!accessValidated)
+    return message($("landingMessage"), "Verify the shared access code first.", true);
   connectAndJoin(code, name.slice(0, 24), accessCode);
 });
 
@@ -791,6 +874,8 @@ socket?.on("joined", (data) => {
     joinRequest?.accessCode || "",
     roomToken,
   );
+  $("adminStatusBadge").classList.toggle("hidden", !data.is_admin);
+  setCoreTeamStatus(Boolean(data.core_team_assembled), false);
   $("accessCode").value = "";
   showRoom(data.code);
   $("chatMessages").replaceChildren();
@@ -829,9 +914,12 @@ socket?.on("join_error", (data) => {
     $("noFile").classList.remove("hidden");
     currentCode = "";
     currentFile = null;
+    $("adminStatusBadge").classList.add("hidden");
+    setCoreTeamStatus(false, false);
     roomView.classList.add("hidden");
     landing.classList.remove("hidden");
   }
+  if (data.access_denied) resetAccessGate();
   message($("landingMessage"), data.message, true);
 });
 socket?.on("connect_error", () =>
@@ -842,6 +930,9 @@ socket?.on("connect_error", () =>
   ),
 );
 socket?.on("members", (data) => renderMembers(data.members));
+socket?.on("core_team_status", (data) => {
+  setCoreTeamStatus(Boolean(data?.assembled), Boolean(data?.animate));
+});
 socket?.on("chat_message", (data) => {
   renderChatMessage(data);
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
@@ -1570,6 +1661,9 @@ $("leaveRoom").addEventListener("click", () => {
   pendingUploadOffer = null;
   latestPlayback = { paused: true, time: 0, playback_rate: 1 };
   nickname = "";
+  resetAccessGate();
+  $("adminStatusBadge").classList.add("hidden");
+  setCoreTeamStatus(false, false);
   $("roomCode").textContent = "------";
   $("memberCount").textContent = "0";
   $("memberList").replaceChildren();

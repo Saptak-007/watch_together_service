@@ -22,8 +22,13 @@ CDN. The page uses system fonts and does not fetch fonts from a third party.
    if (-not (Test-Path .env)) { Copy-Item .env.example .env }
    ```
 
-3. Edit `.env`. Set `SOPHISTICATED_CODE` to a long private shared code. Add the
-   LiveKit URL, API key, and API secret if you want to use the camera call.
+3. Edit `.env`. Set `SOPHISTICATED_CODE` to a long private shared code. Set
+   `A_CODE` to the admin codes, grouped by authority. For example,
+   `A_CODE=sb_a.hd_a=st_a` makes `sb_a` highest authority and `hd_a` and `st_a`
+   equal at the next level. The first three individual codes count toward the
+   `cse_core_team assembled` room announcement. An admin code is released as
+   soon as its user leaves, closes the tab, or disconnects. Add the LiveKit URL,
+   API key, and API secret if you want to use the camera call.
 4. Start Flask and open http://127.0.0.1:5000:
 
    ```powershell
@@ -45,6 +50,7 @@ settings in its Environment page rather than uploading `.env`.
 | Setting | Purpose | Default |
 | --- | --- | --- |
 | `SOPHISTICATED_CODE` | Shared code required to create or join a room | Required |
+| `A_CODE` | Admin access codes: `.` separates authority levels; `=` means equal level | Optional |
 | `LIVEKIT_URL` | LiveKit Cloud WebSocket address | Call feature disabled if missing |
 | `LIVEKIT_API_KEY` | Server-side LiveKit API key | Call feature disabled if missing |
 | `LIVEKIT_API_SECRET` | Server-side LiveKit API secret | Call feature disabled if missing |
@@ -101,7 +107,7 @@ Create a Python Web Service connected to this GitHub repository and deploy the
 
 - **Build command:** `pip install -r requirements.txt`
 - **Start command:** `gunicorn --worker-class gthread --workers 1 --threads 100 --bind 0.0.0.0:$PORT app:app`
-- **Environment:** set `SOPHISTICATED_CODE`, the three LiveKit settings, and
+- **Environment:** set `SOPHISTICATED_CODE`, `A_CODE`, the three LiveKit settings, and
   `SOCKETIO_ALLOW_WEBSOCKET=1`. Set `FRONTEND_ORIGIN` to the exact Netlify site
   origin if Netlify hosts the page separately.
 

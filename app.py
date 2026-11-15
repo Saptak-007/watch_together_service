@@ -109,6 +109,7 @@ def add_api_cors_headers(response):
 # Room membership and pending offers are live process state; durable room data
 # is loaded from the SQLite database below.
 rooms = {}
+ADMIN_CODE_CLAIMS = {}
 ROOMS_LOCK = threading.RLock()
 CODE_ALPHABET = string.ascii_uppercase + string.digits
 FINGERPRINT_CHUNK_SIZE = 8 * 1024 * 1024
@@ -241,6 +242,7 @@ def load_persisted_rooms():
             playback["updated_at"] = now
             rooms[row["code"]] = {
                 "members": {},
+                "core_team_assembled": False,
                 "chat_messages": chat_messages[-200:],
                 "file": file_info,
                 "pending_offer": None,
@@ -377,18 +379,101 @@ def cleanup_expired_rooms():
                 connection.execute("DELETE FROM rooms WHERE code = ?", (code,))
 
 
-def check_access_code(provided_code):
+def configured_admin_codes():
+    """Read A_CODE: dots lower authority; equals separate equal-level codes."""
+    configured = []
+    seen = set()
+    for level, group in enumerate(os.environ.get("A_CODE", "").split("."), start=1):
+        for raw_code in group.split("="):
+            code = raw_code.strip()
+            if code and code not in seen:
+                seen.add(code)
+                configured.append(
+                    {
+                        "code": code,
+                        "level": level,
+                        "is_core_member": len(configured) < 3,
+                    }
+                )
+    return configured
+
+
+def resolve_access_code(provided_code):
+    provided_code = str(provided_code or "").strip()
+    if not provided_code:
+        return None, ("Enter the shared access code.", 403)
+
+    for admin in configured_admin_codes():
+        if secrets.compare_digest(provided_code, admin["code"]):
+            return {
+                "is_admin": True,
+                "admin_code": admin["code"],
+                "admin_level": admin["level"],
+                "is_core_member": admin["is_core_member"],
+            }, None
+
     expected_code = os.environ.get("SOPHISTICATED_CODE", "").strip()
     if not expected_code:
-        return (
+        return None, (
             "Room access is not configured on the server. Set SOPHISTICATED_CODE.",
             503,
         )
+    if secrets.compare_digest(provided_code, expected_code):
+        return {
+            "is_admin": False,
+            "admin_code": None,
+            "admin_level": None,
+            "is_core_member": False,
+        }, None
+    return None, ("The shared access code is incorrect.", 403)
 
-    provided_code = str(provided_code or "").strip()
-    if not secrets.compare_digest(provided_code, expected_code):
-        return "The shared access code is incorrect.", 403
-    return None
+
+def admin_code_claim_error(access, client_id="", room_code="", replace_sids=()):
+    if not access["is_admin"]:
+        return None
+    claim = ADMIN_CODE_CLAIMS.get(access["admin_code"])
+    if not claim:
+        return None
+
+    same_client_room = (
+        bool(client_id)
+        and claim.get("client_id") == client_id
+        and claim.get("room_code") == room_code
+    )
+    replacing_same_tab = same_client_room and claim.get("sid") in replace_sids
+    if replacing_same_tab:
+        return None
+    return "Admin code already in use. Try again later."
+
+
+def core_team_is_assembled(room):
+    core_codes = [
+        admin["code"] for admin in configured_admin_codes() if admin["is_core_member"]
+    ]
+    if len(core_codes) < 3:
+        return False
+    active_codes = {
+        member.get("admin_code")
+        for member in room["members"].values()
+        if member.get("is_core_member")
+    }
+    return all(code in active_codes for code in core_codes[:3])
+
+
+def update_core_team_status(code, room, previous=None, animate=False):
+    was_assembled = (
+        room.get("core_team_assembled", False) if previous is None else previous
+    )
+    assembled = core_team_is_assembled(room)
+    room["core_team_assembled"] = assembled
+    socketio.emit(
+        "core_team_status",
+        {
+            "assembled": assembled,
+            "animate": bool(animate and assembled and not was_assembled),
+        },
+        to=code,
+    )
 
 
 @serialized_room_state
@@ -416,10 +501,20 @@ def authenticated_member(code):
 
 
 @serialized_room_state
-def remove_member(code, room, sid):
+def remove_member(code, room, sid, release_admin_claim=True, update_core_team=True):
     member = room["members"].pop(sid, None)
     if not member:
         return False
+    admin_code = member.get("admin_code")
+    claim = ADMIN_CODE_CLAIMS.get(admin_code) if admin_code else None
+    if (
+        release_admin_claim
+        and claim
+        and claim.get("room_code") == code
+        and claim.get("sid") == sid
+    ):
+        ADMIN_CODE_CLAIMS.pop(admin_code, None)
+    previous_core_team_status = room.get("core_team_assembled", False)
     socketio.server.leave_room(sid, code, namespace="/")
     offer = room.get("pending_offer")
     if offer and offer["uploader_id"] == sid:
@@ -445,6 +540,8 @@ def remove_member(code, room, sid):
             )
     if not room["members"]:
         room["empty_since"] = time.time()
+    if update_core_team:
+        update_core_team_status(code, room, previous=previous_core_team_status)
     persist_room(code, room)
     return True
 
@@ -471,7 +568,11 @@ def playback_snapshot(room):
 @serialized_room_state
 def public_members(room):
     return [
-        {"id": sid, "nickname": member["nickname"]}
+        {
+            "id": sid,
+            "nickname": member["nickname"],
+            "is_admin": member.get("is_admin", False),
+        }
         for sid, member in room["members"].items()
     ]
 
@@ -481,18 +582,45 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.post("/api/access/validate")
+@serialized_room_state
+def validate_access_code():
+    data = request.get_json(silent=True) or {}
+    access, access_error = resolve_access_code(data.get("access_code"))
+    if access_error:
+        return jsonify({"error": access_error[0]}), access_error[1]
+    claim_error = admin_code_claim_error(access)
+    if claim_error:
+        return jsonify({"error": claim_error}), 409
+    return jsonify(
+        {
+            "valid": True,
+            "is_admin": access["is_admin"],
+            "message": (
+                "✦ Admin privileges granted ✦"
+                if access["is_admin"]
+                else "Access verified. You can create or join a room."
+            ),
+        }
+    )
+
+
 @app.post("/api/rooms")
 @serialized_room_state
 def create_room():
     data = request.get_json(silent=True) or {}
-    access_error = check_access_code(data.get("access_code"))
+    access, access_error = resolve_access_code(data.get("access_code"))
     if access_error:
         return jsonify({"error": access_error[0]}), access_error[1]
+    claim_error = admin_code_claim_error(access)
+    if claim_error:
+        return jsonify({"error": claim_error}), 409
 
     code = make_code()
     created_at = time.time()
     rooms[code] = {
         "members": {},
+        "core_team_assembled": False,
         "chat_messages": [],
         "file": None,
         "pending_offer": None,
@@ -750,6 +878,18 @@ def leave_room_on_page_exit(code):
         room, sid, _member = authenticated
         remove_member(code, room, sid)
         socketio.emit("members", {"members": public_members(room)}, to=code)
+    else:
+        token = str(request.form.get("room_token", "")).strip()
+        if token:
+            for admin_code, claim in list(ADMIN_CODE_CLAIMS.items()):
+                claim_token = str(claim.get("token", ""))
+                if (
+                    claim.get("room_code") == code
+                    and claim_token
+                    and secrets.compare_digest(token, claim_token)
+                ):
+                    ADMIN_CODE_CLAIMS.pop(admin_code, None)
+                    break
     return "", 204
 
 
@@ -778,9 +918,9 @@ def connected():
 def on_join(data):
     data = data or {}
     cleanup_expired_rooms()
-    access_error = check_access_code(data.get("access_code"))
+    access, access_error = resolve_access_code(data.get("access_code"))
     if access_error:
-        emit("join_error", {"message": access_error[0]})
+        emit("join_error", {"message": access_error[0], "access_denied": True})
         return
 
     code = str(data.get("code", "")).strip().upper()
@@ -797,16 +937,37 @@ def on_join(data):
         emit("join_error", {"message": "Enter a nickname to join."})
         return
 
-    # A page refresh creates a new Socket.IO session ID. Replace any prior
-    # session from this browser tab so the member list does not show duplicates.
-    if client_id:
-        old_sids = [
-            sid
-            for sid, member in room["members"].items()
-            if member.get("client_id") == client_id
-        ]
-        for old_sid in old_sids:
-            remove_member(code, room, old_sid)
+    # A page refresh creates a new Socket.IO session ID. Replace the old tab
+    # session while preserving its admin-code claim through the handoff.
+    old_sids = [
+        sid
+        for sid, member in room["members"].items()
+        if client_id and member.get("client_id") == client_id
+    ]
+    claim_error = admin_code_claim_error(
+        access,
+        client_id=client_id,
+        room_code=code,
+        replace_sids=old_sids,
+    )
+    if claim_error:
+        emit("join_error", {"message": claim_error, "access_denied": True})
+        return
+
+    previous_core_team_status = room.get("core_team_assembled", False)
+    for old_sid in old_sids:
+        old_member = room["members"].get(old_sid, {})
+        preserve_claim = (
+            access["is_admin"]
+            and old_member.get("admin_code") == access["admin_code"]
+        )
+        remove_member(
+            code,
+            room,
+            old_sid,
+            release_admin_claim=not preserve_claim,
+            update_core_team=False,
+        )
 
     if request.sid not in room["members"] and len(room["members"]) >= MAX_ROOM_MEMBERS:
         emit("join_error", {"message": "This room is full. Ask the creator to try again later."})
@@ -818,7 +979,18 @@ def on_join(data):
         "nickname": nickname,
         "client_id": client_id,
         "token": member_token,
+        "is_admin": access["is_admin"],
+        "admin_code": access["admin_code"],
+        "admin_level": access["admin_level"],
+        "is_core_member": access["is_core_member"],
     }
+    if access["is_admin"]:
+        ADMIN_CODE_CLAIMS[access["admin_code"]] = {
+            "room_code": code,
+            "sid": request.sid,
+            "client_id": client_id,
+            "token": member_token,
+        }
     room["empty_since"] = None
     pending_offer = live_pending_offer(room)
     if pending_offer and request.sid != pending_offer["uploader_id"]:
@@ -828,6 +1000,7 @@ def on_join(data):
         {
             "code": code,
             "member_token": member_token,
+            "is_admin": access["is_admin"],
             "members": public_members(room),
             "file": (
                 {
@@ -842,7 +1015,14 @@ def on_join(data):
             ),
             "playback": playback_snapshot(room),
             "chat_messages": room["chat_messages"],
+            "core_team_assembled": core_team_is_assembled(room),
         },
+    )
+    update_core_team_status(
+        code,
+        room,
+        previous=previous_core_team_status,
+        animate=True,
     )
     if pending_offer and request.sid != pending_offer["uploader_id"]:
         socketio.emit(
