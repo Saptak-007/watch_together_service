@@ -111,17 +111,47 @@
         </div>
         <div class="room-grid">
           <section class="player-panel panel">
-            <div class="video-wrap" id="videoWrap">
-              <video id="video" controls playsinline></video>
-              <div id="emptyVideo" class="empty-video">
-                <div class="empty-icon">▷</div>
-                <h3>Waiting for a movie</h3>
-                <p>Anyone in the room can add an audio or video file below.</p>
+            <div class="video-player" id="videoPlayer">
+              <div class="video-wrap" id="videoWrap">
+                <video id="video" playsinline preload="metadata" tabindex="0"></video>
+                <div id="emptyVideo" class="empty-video">
+                  <div class="empty-icon">▷</div>
+                  <h3>Waiting for a movie</h3>
+                  <p>Anyone in the room can add an audio or video file below.</p>
+                </div>
+              </div>
+              <div class="media-controls" aria-label="Video controls">
+                <div class="media-timeline">
+                  <button id="togglePlayback" class="media-button primary-media-button" type="button" aria-label="Play" disabled>Play</button>
+                  <span id="playbackTime" class="media-time">0:00</span>
+                  <label class="visually-hidden" for="playbackSeek">Seek video</label>
+                  <input id="playbackSeek" class="seek-control" type="range" min="0" max="0" step="0.1" value="0" disabled />
+                  <span id="playbackDuration" class="media-time">0:00</span>
+                </div>
+                <div class="media-tools">
+                  <label class="playback-speed-control" for="playbackSpeed">
+                    Speed
+                    <select id="playbackSpeed" aria-label="Playback speed">
+                      <option value="0.5">0.5×</option>
+                      <option value="0.75">0.75×</option>
+                      <option value="1" selected>1×</option>
+                      <option value="1.25">1.25×</option>
+                      <option value="1.5">1.5×</option>
+                      <option value="1.75">1.75×</option>
+                      <option value="2">2×</option>
+                    </select>
+                  </label>
+                  <button id="toggleMute" class="media-button" type="button" aria-label="Mute audio" disabled>Mute</button>
+                  <label class="visually-hidden" for="playbackVolume">Local volume</label>
+                  <input id="playbackVolume" class="volume-control" type="range" min="0" max="1" step="0.01" value="1" disabled />
+                  <button id="resyncPlayback" class="media-button" type="button" disabled>Resync</button>
+                  <button id="toggleFullscreen" class="media-button" type="button" aria-label="Enter fullscreen">Fullscreen</button>
+                </div>
               </div>
             </div>
             <div class="player-foot">
               <span><i class="live-dot"></i> SYNCED PLAYBACK</span
-              ><span>Volume stays yours</span>
+              ><span>Play, pause, and speed sync · Volume stays yours</span>
             </div>
             <section class="call-panel" aria-labelledby="callTitle">
               <div class="call-heading">

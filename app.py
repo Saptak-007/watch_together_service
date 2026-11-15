@@ -237,6 +237,7 @@ def load_persisted_rooms():
                     file_info["available"] = False
                     file_info["stored_name"] = None
             playback["paused"] = True
+            playback.setdefault("playback_rate", 1)
             playback["updated_at"] = now
             rooms[row["code"]] = {
                 "members": {},
@@ -267,6 +268,7 @@ def attach_video_to_room(code, room, file_info, uploader_id):
     room["playback"] = {
         "paused": True,
         "time": 0,
+        "playback_rate": 1,
         "file_id": file_id,
         "updated_at": time.time(),
     }
@@ -459,8 +461,10 @@ def live_pending_offer(room):
 @serialized_room_state
 def playback_snapshot(room):
     state = dict(room["playback"])
+    state.setdefault("playback_rate", 1)
     if not state.get("paused"):
-        state["time"] += max(0.0, time.time() - state.get("updated_at", time.time()))
+        elapsed = max(0.0, time.time() - state.get("updated_at", time.time()))
+        state["time"] += elapsed * state["playback_rate"]
     return state
 
 
@@ -495,6 +499,7 @@ def create_room():
         "playback": {
             "paused": True,
             "time": 0,
+            "playback_rate": 1,
             "file_id": None,
             "updated_at": created_at,
         },
@@ -943,6 +948,7 @@ def on_video_offer_response(data):
         room["playback"] = {
             "paused": True,
             "time": 0,
+            "playback_rate": 1,
             "file_id": file_id,
             "updated_at": time.time(),
         }
@@ -990,14 +996,41 @@ def on_playback(data):
         return
     if not math.isfinite(position) or position < 0:
         return
+    try:
+        playback_rate = float(
+            data.get("playback_rate", room["playback"].get("playback_rate", 1))
+        )
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(playback_rate) or not 0.25 <= playback_rate <= 4:
+        return
     room["playback"] = {
         "paused": paused,
         "time": position,
+        "playback_rate": playback_rate,
         "file_id": current_file_id,
         "updated_at": time.time(),
     }
     persist_room(code, room)
     emit("playback", playback_snapshot(room), to=code, include_self=False)
+
+
+@socketio.on("playback_resync")
+@serialized_room_state
+def on_playback_resync(data):
+    data = data or {}
+    code = str(data.get("code", "")).strip().upper()
+    room = rooms.get(code)
+    if (
+        not room
+        or request.sid not in room["members"]
+        or not room.get("file")
+        or data.get("file_id") != room["file"]["id"]
+    ):
+        return
+    state = playback_snapshot(room)
+    state["resync"] = True
+    socketio.emit("playback", state, to=code)
 
 
 @socketio.on("playback_sync")

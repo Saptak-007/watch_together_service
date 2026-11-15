@@ -12,6 +12,7 @@ const $ = (id) => document.getElementById(id);
 const landing = $("landing"),
   roomView = $("room"),
   video = $("video");
+const videoPlayer = $("videoPlayer");
 let currentCode = "",
   nickname = "",
   roomToken = "",
@@ -19,8 +20,10 @@ let currentCode = "",
   currentFile = null,
   incomingVideoOffer = null,
   pendingUploadOffer = null,
-  latestPlayback = { paused: true, time: 0 },
+  latestPlayback = { paused: true, time: 0, playback_rate: 1 },
   syncing = false,
+  seekingWithControl = false,
+  lastAudibleVolume = 1,
   promptPending = false;
 let liveKitRoom = null,
   liveKitJoinAttempt = 0,
@@ -35,7 +38,11 @@ const liveKitTiles = new Map();
 const ACTIVE_ROOM_KEY = "sidebyside.activeRoom";
 const CLIENT_ID_KEY = "sidebyside.clientId";
 const FINGERPRINT_CHUNK_SIZE = 8 * 1024 * 1024;
+const FULLSCREEN_CONTROLS_IDLE_MS = 2500;
 let toastTimeout = null;
+let fullscreenControlsTimer = null;
+let fullscreenInteractionMode = "pointer";
+let videoClickTimer = null;
 
 function showToast(text) {
   const toast = $("toast");
@@ -791,7 +798,7 @@ socket?.on("joined", (data) => {
   (data.chat_messages || []).forEach(renderChatMessage);
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
   renderMembers(data.members);
-  latestPlayback = data.playback || { paused: true, time: 0 };
+  latestPlayback = data.playback || { paused: true, time: 0, playback_rate: 1 };
   if (data.file) {
     setFile(data.file, false);
     restoreCachedVideo(data.file).then((isCached) => {
@@ -908,7 +915,7 @@ socket?.on("video_offer_progress", (progress) => {
 });
 socket?.on("playback", (state) => {
   latestPlayback = state;
-  applyPlayback(state);
+  applyPlayback(state, Boolean(state.resync));
 });
 setInterval(() => {
   if (socket?.connected && currentCode && currentFile && video.src) {
@@ -1255,45 +1262,280 @@ $("copyCode").addEventListener("click", async () => {
 });
 
 function sendPlayback() {
-  if (syncing || !socket || !currentCode || !video.src) return;
+  if (syncing || seekingWithControl || !socket || !currentCode || !video.src) return;
   socket.emit("playback", {
     code: currentCode,
     file_id: currentFile?.id || null,
     paused: video.paused,
     time: video.currentTime,
+    playback_rate: video.playbackRate,
   });
 }
+
 video.addEventListener("pause", sendPlayback);
 video.addEventListener("play", sendPlayback);
 video.addEventListener("seeked", sendPlayback);
+video.addEventListener("ratechange", sendPlayback);
+video.addEventListener("timeupdate", updatePlaybackTimeline);
+video.addEventListener("durationchange", updatePlaybackTimeline);
 video.addEventListener("loadedmetadata", () => {
+  updatePlaybackTimeline();
+  updatePlayerControlAvailability();
   if (currentCode) applyPlayback(latestPlayback);
 });
-function applyPlayback(state) {
+video.addEventListener("emptied", updatePlayerControlAvailability);
+video.addEventListener("volumechange", updateVolumeControls);
+video.addEventListener("play", updatePlayPauseButton);
+video.addEventListener("pause", updatePlayPauseButton);
+
+$("togglePlayback").addEventListener("click", toggleVideoPlayback);
+video.addEventListener("click", () => {
+  if (!video.src) return;
+  clearTimeout(videoClickTimer);
+  videoClickTimer = setTimeout(() => {
+    videoClickTimer = null;
+    video.focus({ preventScroll: true });
+    toggleVideoPlayback();
+  }, 220);
+});
+video.addEventListener("dblclick", () => {
+  clearTimeout(videoClickTimer);
+  videoClickTimer = null;
+  if (video.src) void togglePlayerFullscreen();
+});
+
+$("playbackSeek").addEventListener("input", (event) => {
+  if (!Number.isFinite(video.duration)) return;
+  seekingWithControl = true;
+  video.currentTime = Number(event.target.value);
+  $("playbackTime").textContent = formatPlaybackTime(video.currentTime);
+});
+$("playbackSeek").addEventListener("change", () => {
+  seekingWithControl = false;
+  updatePlaybackTimeline();
+  sendPlayback();
+});
+
+$("playbackVolume").addEventListener("input", (event) => {
+  video.volume = Number(event.target.value);
+  if (video.volume > 0) lastAudibleVolume = video.volume;
+  video.muted = video.volume === 0;
+  updateVolumeControls();
+});
+$("toggleMute").addEventListener("click", () => {
+  if (video.muted || video.volume === 0) {
+    if (video.volume === 0) video.volume = lastAudibleVolume;
+    video.muted = false;
+  } else {
+    video.muted = true;
+  }
+  updateVolumeControls();
+});
+
+$("playbackSpeed").addEventListener("change", (event) => {
+  const rate = Number(event.target.value);
+  if (!Number.isFinite(rate) || rate < 0.25 || rate > 4) return;
+  video.playbackRate = rate;
+  sendPlayback();
+});
+
+$("resyncPlayback").addEventListener("click", () => {
+  if (!socket?.connected || !currentCode || !currentFile || !video.src) {
+    message($("roomMessage"), "Load the room’s video and reconnect before resyncing.", true);
+    return;
+  }
+  socket.emit("playback_resync", { code: currentCode, file_id: currentFile.id });
+  showToast("Resyncing playback for everyone");
+});
+$("toggleFullscreen").addEventListener("click", () => {
+  void togglePlayerFullscreen();
+});
+
+async function togglePlayerFullscreen() {
+  try {
+    if (document.fullscreenElement === videoPlayer) await document.exitFullscreen();
+    else await videoPlayer.requestFullscreen();
+  } catch {
+    message($("roomMessage"), "Fullscreen isn’t available in this browser.", true);
+  }
+}
+
+function toggleVideoPlayback() {
+  if (!video.src) return;
+  if (video.paused) {
+    video.play().catch(() =>
+      message($("roomMessage"), "This video could not start playing in your browser.", true),
+    );
+  } else {
+    video.pause();
+  }
+}
+
+function applyPlayback(state, force = false) {
   if (
     !video.src ||
     (state.file_id && state.file_id !== currentFile?.id) ||
     video.readyState < HTMLMediaElement.HAVE_METADATA ||
-    !Number.isFinite(Number(state.time))
-  )
-    return;
+    !Number.isFinite(Number(state.time)) ||
+    seekingWithControl
+  ) return;
+
   syncing = true;
   const target = Number(state.time);
-  if (Math.abs(video.currentTime - target) > 0.8) video.currentTime = target;
+  const playbackRate = Number(state.playback_rate ?? 1);
+  if (Number.isFinite(playbackRate) && playbackRate >= 0.25 && playbackRate <= 4) {
+    if (Math.abs(video.playbackRate - playbackRate) > 0.001) {
+      video.playbackRate = playbackRate;
+    }
+    updatePlaybackSpeedControl(playbackRate);
+  }
+  if (force || Math.abs(video.currentTime - target) > 0.8) video.currentTime = target;
   if (state.paused && !video.paused) video.pause();
-  else if (!state.paused && video.paused)
-    video
-      .play()
-      .catch(() =>
-        message(
-          $("roomMessage"),
-          "Press play once to allow synchronized playback.",
-        ),
-      );
-  setTimeout(() => {
-    syncing = false;
-  }, 120);
+  else if (!state.paused && video.paused) {
+    video.play().catch(() =>
+      message($("roomMessage"), "Press play once to allow synchronized playback.", true),
+    );
+  }
+  setTimeout(() => { syncing = false; }, 120);
 }
+
+function updatePlaybackSpeedControl(rate) {
+  const select = $("playbackSpeed");
+  const value = String(rate);
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = `${rate}×`;
+    select.append(option);
+  }
+  select.value = value;
+}
+
+function formatPlaybackTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = String(total % 60).padStart(2, "0");
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${remainder}`
+    : `${minutes}:${remainder}`;
+}
+
+function updatePlaybackTimeline() {
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  const seek = $("playbackSeek");
+  seek.max = String(duration);
+  if (!seekingWithControl) seek.value = String(Math.min(video.currentTime || 0, duration));
+  $("playbackTime").textContent = formatPlaybackTime(video.currentTime);
+  $("playbackDuration").textContent = formatPlaybackTime(duration);
+}
+
+function updatePlayPauseButton() {
+  const button = $("togglePlayback");
+  button.textContent = video.paused ? "Play" : "Pause";
+  button.setAttribute("aria-label", video.paused ? "Play" : "Pause");
+}
+
+function updateVolumeControls() {
+  if (video.volume > 0) lastAudibleVolume = video.volume;
+  const muted = video.muted || video.volume === 0;
+  const button = $("toggleMute");
+  button.textContent = muted ? "Unmute" : "Mute";
+  button.setAttribute("aria-label", muted ? "Unmute audio" : "Mute audio");
+  $("playbackVolume").value = String(video.muted ? 0 : video.volume);
+}
+
+function updatePlayerControlAvailability() {
+  const ready = Boolean(video.src) && video.readyState >= HTMLMediaElement.HAVE_METADATA;
+  $("togglePlayback").disabled = !ready;
+  $("toggleMute").disabled = !ready;
+  $("playbackSeek").disabled = !ready || !Number.isFinite(video.duration);
+  $("playbackVolume").disabled = !ready;
+  $("playbackSpeed").disabled = !ready;
+  $("resyncPlayback").disabled = !ready;
+  $("toggleFullscreen").disabled = !videoPlayer.requestFullscreen;
+  updatePlayPauseButton();
+  updatePlaybackTimeline();
+  updateVolumeControls();
+}
+
+function isInteractiveTarget(target) {
+  return Boolean(
+    target.closest("button, a, input, select, textarea, [contenteditable='true']") ||
+    target.isContentEditable,
+  );
+}
+
+document.addEventListener("keydown", (event) => {
+  if (
+    event.repeat ||
+    roomView.classList.contains("hidden") ||
+    event.altKey || event.ctrlKey || event.metaKey ||
+    isInteractiveTarget(event.target)
+  ) return;
+
+  const key = event.key.toLowerCase();
+  if (key === "f" && video.src) {
+    event.preventDefault();
+    void togglePlayerFullscreen();
+  } else if ((key === "k" || event.code === "Space") && video.src) {
+    event.preventDefault();
+    toggleVideoPlayback();
+  }
+});
+
+videoPlayer.addEventListener("pointermove", showFullscreenControls);
+videoPlayer.addEventListener("pointerdown", showFullscreenControls);
+videoPlayer.addEventListener("keydown", () => {
+  fullscreenInteractionMode = "keyboard";
+  scheduleFullscreenControlsHide();
+});
+videoPlayer.addEventListener("focusout", () => {
+  if (fullscreenInteractionMode !== "keyboard") return;
+  setTimeout(() => {
+    if (!videoPlayer.classList.contains("controls-hidden")) scheduleFullscreenControlsHide();
+  }, 0);
+});
+
+function showFullscreenControls() {
+  fullscreenInteractionMode = "pointer";
+  scheduleFullscreenControlsHide();
+}
+
+function scheduleFullscreenControlsHide() {
+  if (document.fullscreenElement !== videoPlayer) return;
+  clearTimeout(fullscreenControlsTimer);
+  videoPlayer.classList.remove("controls-hidden");
+  const controls = videoPlayer.querySelector(".media-controls");
+  if (fullscreenInteractionMode === "keyboard" && controls.contains(document.activeElement)) {
+    fullscreenControlsTimer = null;
+    return;
+  }
+  fullscreenControlsTimer = setTimeout(() => {
+    fullscreenControlsTimer = null;
+    if (document.fullscreenElement !== videoPlayer) return;
+    if (fullscreenInteractionMode === "keyboard" && controls.contains(document.activeElement)) return;
+    videoPlayer.classList.add("controls-hidden");
+    if (controls.contains(document.activeElement)) document.activeElement.blur();
+  }, FULLSCREEN_CONTROLS_IDLE_MS);
+}
+
+document.addEventListener("fullscreenchange", () => {
+  const fullscreen = document.fullscreenElement === videoPlayer;
+  $("toggleFullscreen").textContent = fullscreen ? "Exit fullscreen" : "Fullscreen";
+  $("toggleFullscreen").setAttribute("aria-label", fullscreen ? "Exit fullscreen" : "Enter fullscreen");
+  if (fullscreen) {
+    fullscreenInteractionMode = "pointer";
+    scheduleFullscreenControlsHide();
+  } else {
+    clearTimeout(fullscreenControlsTimer);
+    fullscreenControlsTimer = null;
+    videoPlayer.classList.remove("controls-hidden");
+  }
+});
+
+updatePlayerControlAvailability();
 
 window.addEventListener("pagehide", () => {
   leaveLiveKitCall();
@@ -1326,7 +1568,7 @@ $("leaveRoom").addEventListener("click", () => {
   currentFile = null;
   incomingVideoOffer = null;
   pendingUploadOffer = null;
-  latestPlayback = { paused: true, time: 0 };
+  latestPlayback = { paused: true, time: 0, playback_rate: 1 };
   nickname = "";
   $("roomCode").textContent = "------";
   $("memberCount").textContent = "0";
