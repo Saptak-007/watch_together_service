@@ -24,7 +24,7 @@ CDN. The page uses system fonts and does not fetch fonts from a third party.
 
 3. Edit `.env`. Set `SOPHISTICATED_CODE` to a long private shared code. Set
    `A_CODE` to the admin codes, grouped by authority. For example,
-   `A_CODE=sb_a.hd_a=st_a` makes `sb_a` highest authority and `hd_a` and `st_a`
+   `A_CODE=admin_code_1.admin_code_2=admin_code_3` makes `admin_code_1` highest authority and `admin_code_2` and `admin_code_3`
    equal at the next level. The first three individual codes count toward the
    `cse_core_team assembled` room announcement. An admin code is released as
    soon as its user leaves, closes the tab, or disconnects. Add the LiveKit URL,
